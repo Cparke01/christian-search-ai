@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import clientPromise from "@/lib/mongodb";
 
-
 type ReviewRecord = {
   _id?: unknown;
   userId: string;
@@ -120,7 +119,6 @@ export async function POST(req: NextRequest) {
     const reviewsCollection = db.collection<ReviewRecord>("reviews");
 
     const now = new Date();
-
     const existing = await reviewsCollection.findOne({ userId, movieId });
 
     if (existing) {
@@ -201,8 +199,9 @@ export async function DELETE(req: NextRequest) {
 
     const client = await clientPromise;
     const db = client.db("clearstream");
+    const reviewsCollection = db.collection<ReviewRecord>("reviews");
 
-    const result = await db.collection("reviews").deleteOne({
+    const result = await reviewsCollection.deleteOne({
       userId,
       movieId,
     });

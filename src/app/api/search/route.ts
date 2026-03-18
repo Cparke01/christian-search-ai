@@ -32,10 +32,22 @@ type OutputMovie = {
   providers?: ProviderInfo[];
   providerLink?: string;
   priceStatus?: string;
+  source?: "tmdb" | "christian-ai";
+};
+
+type ChristianSearchItem = {
+  title?: string;
+  source?: string;
+  type?: string;
+  genre?: string;
+  description?: string;
+  url?: string;
 };
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
+const CHRISTIAN_SEARCH_API =
+  process.env.CHRISTIAN_SEARCH_API || "https://christian-search-ai.onrender.com";
 
 const BAD_GENRE_IDS = new Set([
   27, // Horror
@@ -301,6 +313,7 @@ async function enrichMovie(
     providers: providerData.providers,
     providerLink: providerData.providerLink,
     priceStatus: providerData.priceStatus,
+    source: "tmdb",
   };
 }
 
@@ -344,15 +357,43 @@ async function discoverMovies(params: {
   return tmdbFetch<TmdbSearchResponse>(`/discover/movie?${searchParams.toString()}`);
 }
 
+async function searchChristianBackend(query: string) {
+  const url = `${CHRISTIAN_SEARCH_API}/search?q=${encodeURIComponent(query)}`;
+
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Christian backend request failed: ${response.status} ${text}`);
+  }
+
+  const data = (await response.json()) as {
+    results?: ChristianSearchItem[];
+  };
+
+  const results = (data.results || []).map((item, index): OutputMovie => ({
+    id: 900000 + index,
+    title: item.title || "Untitled",
+    overview: item.description || "",
+    poster_path: undefined,
+    release_date: "",
+    certification: item.type || undefined,
+    vote_average: undefined,
+    providers: item.url
+      ? [{ name: item.source || "Catalog", type: "stream" }]
+      : [],
+    providerLink: item.url || undefined,
+    priceStatus: item.genre || item.source || "Christian catalog result",
+    source: "christian-ai",
+  }));
+
+  return results;
+}
+
 export async function GET(request: NextRequest) {
   try {
-    if (!TMDB_API_KEY) {
-      return NextResponse.json(
-        { error: "TMDB_API_KEY is missing in .env.local" },
-        { status: 500 },
-      );
-    }
-
     const { searchParams } = new URL(request.url);
 
     const q = searchParams.get("q")?.trim() || "";
@@ -370,6 +411,24 @@ export async function GET(request: NextRequest) {
     const excludedGenreIds = parseCsvParam(searchParams.get("excludeGenres")).map((v) => Number(v));
     const allowedRatings = parseCsvParam(searchParams.get("allowedRatings"));
     const excludedRatings = parseCsvParam(searchParams.get("excludeRatings"));
+
+    if (mode === "christian") {
+      if (!q) {
+        return NextResponse.json({ results: [] });
+      }
+
+      const christianResults = await searchChristianBackend(q);
+      return NextResponse.json({
+        results: christianResults.slice(0, limit),
+      });
+    }
+
+    if (!TMDB_API_KEY) {
+      return NextResponse.json(
+        { error: "TMDB_API_KEY is missing in .env.local" },
+        { status: 500 },
+      );
+    }
 
     let rawMovies: TmdbMovie[] = [];
 

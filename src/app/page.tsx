@@ -769,7 +769,7 @@ const deleteMovieReview = async (movieId: number) => {
       params.set("minVoteAverage", "4.8");
       params.set("nonce", nonce);
 
-      const res = await fetch(`/api/search?${params.toString()}`);
+      const res = await fetch(`https://christian-search-ai.onrender.com/api/search?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -1414,14 +1414,93 @@ const deleteMovieReview = async (movieId: number) => {
                           )}
                         </div>
 
-                        <p className="mt-4 text-sm leading-6 text-slate-300">
-                          {movie.overview && movie.overview.trim().length > 0
-                            ? movie.overview
-                            : "Overview unavailable."}
-                        </p>
+                         <p className="mt-4 text-sm leading-6 text-slate-300">
+  {movie.overview && movie.overview.trim().length > 0
+    ? movie.overview
+    : "Overview unavailable."}
+</p>
 
-                        {hasSearched && (
-                          <div className="mt-4">
+<div className="mt-5 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+  <div className="flex items-center justify-between gap-3">
+    <p className="text-sm font-semibold text-slate-200">Your Rating</p>
+    {getMovieRating(movie.id) > 0 && (
+      <span className="text-xs text-slate-400">
+        Saved: {getMovieRating(movie.id)}/5
+      </span>
+    )}
+  </div>
+
+  <div className="mt-3 flex flex-wrap gap-2">
+    {[1, 2, 3, 4, 5].map((star) => {
+      const active = star <= getMovieRating(movie.id);
+
+      return (
+        <button
+          key={`${movie.id}-star-${star}`}
+          type="button"
+          onClick={() => saveMovieReview(movie, star)}
+          disabled={reviewLoadingMovieId === movie.id}
+          className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
+            active
+              ? "border-yellow-300/50 bg-yellow-500/15 text-yellow-200"
+              : "border-slate-600 bg-slate-800 text-slate-200 hover:border-cyan-400/50"
+          }`}
+          title={`Rate ${star} out of 5`}
+        >
+          {active ? "★" : "☆"} {star}
+        </button>
+      );
+    })}
+  </div>
+
+  <div className="mt-4">
+    <label
+      htmlFor={`review-${movie.id}`}
+      className="mb-2 block text-sm font-semibold text-slate-200"
+    >
+      Short Review
+    </label>
+
+    <textarea
+      id={`review-${movie.id}`}
+      value={getMovieReviewText(movie.id)}
+      onChange={(e) => setMovieReviewDraft(movie.id, e.target.value)}
+      placeholder="Write a short note about this movie..."
+      className="min-h-[88px] w-full rounded-xl border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+    />
+
+    <div className="mt-3 flex flex-wrap gap-3">
+      <button
+        type="button"
+        onClick={() =>
+          saveMovieReview(
+            movie,
+            getMovieRating(movie.id) || 5,
+            getMovieReviewText(movie.id)
+          )
+        }
+        disabled={reviewLoadingMovieId === movie.id}
+        className="inline-flex items-center rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-60"
+      >
+        {reviewLoadingMovieId === movie.id ? "Saving..." : "Save Review"}
+      </button>
+
+      {getMovieRating(movie.id) > 0 && (
+        <button
+          type="button"
+          onClick={() => deleteMovieReview(movie.id)}
+          disabled={reviewLoadingMovieId === movie.id}
+          className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400/50 disabled:opacity-60"
+        >
+          Remove Review
+        </button>
+      )}
+    </div>
+  </div>
+</div>
+
+            {hasSearched && (
+               <div className="mt-4">
                             <p className="text-sm font-semibold text-slate-200">
                               Provider Status
                             </p>
