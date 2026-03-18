@@ -769,7 +769,7 @@ const deleteMovieReview = async (movieId: number) => {
       params.set("minVoteAverage", "4.8");
       params.set("nonce", nonce);
 
-      const res = await fetch(`https://christian-search-ai.onrender.com/api/search?${params.toString()}`);
+      const res = await fetch(`/api/search?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
