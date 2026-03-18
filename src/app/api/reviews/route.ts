@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import clientPromise from "@/lib/mongodb";
+import type { OptionalId } from "mongodb";
 
 type ReviewRecord = {
-  _id?: unknown;
   userId: string;
   movieId: number;
   title: string;
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const newReview: ReviewRecord = {
+    const newReview: OptionalId<ReviewRecord> = {
       userId,
       movieId,
       title,
@@ -160,7 +160,6 @@ export async function POST(req: NextRequest) {
     };
 
     const result = await reviewsCollection.insertOne(newReview);
-
     return NextResponse.json(
       {
         message: "Review created successfully",
