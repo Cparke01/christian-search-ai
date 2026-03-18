@@ -105,7 +105,6 @@ const CATEGORIES: Category[] = [
     label: "Any Genre",
     fallbackQuery: "",
     anyGenre: true,
-    gOnly: true,
   },
   {
     key: "comedy",
@@ -179,8 +178,9 @@ const CATEGORIES: Category[] = [
   {
     key: "mystery",
     label: "Mystery",
-    fallbackQuery: "family mystery adventure movies",
-    excludedGenreIds: ["27", "53", "80"],
+    genreId: "9648",
+    fallbackQuery: "best mystery detective movies",
+    excludedGenreIds: ["27"],
   },
   {
     key: "documentary",

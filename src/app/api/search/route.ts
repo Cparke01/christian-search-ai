@@ -52,8 +52,6 @@ const CHRISTIAN_SEARCH_API = (
 
 const BAD_GENRE_IDS = new Set([
   27, // Horror
-  53, // Thriller
-  80, // Crime
   10752, // War
 ]);
 
@@ -62,7 +60,6 @@ const BANNED_WORDS = [
   "slasher",
   "killer",
   "kill",
-  "murder",
   "blood",
   "terror",
   "evil",
@@ -118,38 +115,61 @@ function containsBannedWords(text: string) {
   return BANNED_WORDS.some((word) => normalized.includes(word));
 }
 
-function isFamilySafeTitle(movie: TmdbMovie) {
+function isFamilySafeTitle(movie: TmdbMovie, options?: { family?: boolean; isMysteryGenre?: boolean }) {
   const title = movie.title || "";
   const overview = movie.overview || "";
+
+  if (!options?.family) return true;
+  if (options.isMysteryGenre) return true;
+
   return !containsBannedWords(`${title} ${overview}`);
 }
 
-function passesGenreRules(movie: TmdbMovie, excludedGenreIds: number[], family: boolean) {
+function passesGenreRules(
+  movie: TmdbMovie,
+  excludedGenreIds: number[],
+  family: boolean,
+  isMysteryGenre: boolean,
+) {
   const genreIds = movie.genre_ids || [];
 
   if (excludedGenreIds.length > 0 && genreIds.some((id) => excludedGenreIds.includes(id))) {
     return false;
   }
 
-  if (family && genreIds.some((id) => BAD_GENRE_IDS.has(id))) {
-    return false;
+  if (family) {
+    const blockedGenres = genreIds.filter((id) => BAD_GENRE_IDS.has(id));
+
+    if (blockedGenres.length > 0) {
+      return false;
+    }
+
+    // For family mystery, allow thriller/crime overlap if the main genre is mystery.
+    if (!isMysteryGenre && genreIds.includes(9648) === false) {
+      // no-op, just explicit for clarity
+    }
   }
 
   return true;
 }
 
-function passesBasicMovieRules(movie: TmdbMovie, minVoteCount: number, minVoteAverage: number) {
+function passesBasicMovieRules(
+  movie: TmdbMovie,
+  minVoteCount: number,
+  minVoteAverage: number,
+  options?: { family?: boolean; isMysteryGenre?: boolean },
+) {
   if (!movie.id || !movie.title) return false;
   if (movie.adult) return false;
   if ((movie.vote_count || 0) < minVoteCount) return false;
   if ((movie.vote_average || 0) < minVoteAverage) return false;
-  if (!isFamilySafeTitle(movie)) return false;
+  if (!isFamilySafeTitle(movie, options)) return false;
   return true;
 }
 
 async function tmdbFetch<T>(path: string) {
   if (!TMDB_API_KEY) {
-    throw new Error("TMDB_API_KEY is missing in .env.local");
+    throw new Error("TMDB_API_KEY is missing in environment variables");
   }
 
   const separator = path.includes("?") ? "&" : "?";
@@ -345,7 +365,14 @@ async function discoverMovies(params: {
   if (params.family) {
     searchParams.set("certification_country", params.region);
     searchParams.set("certification.lte", "PG");
-    searchParams.set("without_genres", "27,53,80,9648,10752");
+
+    // Do not block mystery globally here.
+    if (params.genre === "9648") {
+      searchParams.set("without_genres", "27,10752");
+    } else {
+      searchParams.set("without_genres", "27,10752");
+    }
+
     searchParams.set("sort_by", "popularity.desc");
   } else if (params.mode === "bestDeal" || params.mode === "watchNow") {
     searchParams.set("sort_by", "popularity.desc");
@@ -399,8 +426,11 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
 
+    const genreParam = searchParams.get("genre");
+    const isMysteryGenre = genreParam === "9648";
+
     const q = searchParams.get("q")?.trim() || "";
-    const genre = searchParams.get("genre")?.trim() || "";
+    const genre = genreParam?.trim() || "";
     const region = searchParams.get("region")?.trim() || "US";
     const mode = searchParams.get("mode")?.trim() || "search";
 
@@ -428,7 +458,7 @@ export async function GET(request: NextRequest) {
 
     if (!TMDB_API_KEY) {
       return NextResponse.json(
-        { error: "TMDB_API_KEY is missing in .env.local" },
+        { error: "TMDB_API_KEY is missing in environment variables" },
         { status: 500 },
       );
     }
@@ -457,8 +487,19 @@ export async function GET(request: NextRequest) {
     }
 
     let filtered = uniqueById(rawMovies).filter((movie) => {
-      if (!passesBasicMovieRules(movie, minVoteCount, minVoteAverage)) return false;
-      if (!passesGenreRules(movie, excludedGenreIds, family)) return false;
+      if (
+        !passesBasicMovieRules(movie, minVoteCount, minVoteAverage, {
+          family,
+          isMysteryGenre,
+        })
+      ) {
+        return false;
+      }
+
+      if (!passesGenreRules(movie, excludedGenreIds, family, isMysteryGenre)) {
+        return false;
+      }
+
       return true;
     });
 
@@ -469,7 +510,8 @@ export async function GET(request: NextRequest) {
         if (badGenre) return false;
 
         const text = `${movie.title || ""} ${movie.overview || ""}`.toLowerCase();
-        if (containsBannedWords(text)) return false;
+
+        if (!isMysteryGenre && containsBannedWords(text)) return false;
 
         return true;
       });
@@ -497,7 +539,7 @@ export async function GET(request: NextRequest) {
         }
 
         const text = `${movie.title || ""} ${movie.overview || ""}`.toLowerCase();
-        if (containsBannedWords(text)) return false;
+        if (!isMysteryGenre && containsBannedWords(text)) return false;
 
         return true;
       });
