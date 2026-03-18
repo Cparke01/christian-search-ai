@@ -46,8 +46,9 @@ type ChristianSearchItem = {
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
-const CHRISTIAN_SEARCH_API =
-  process.env.CHRISTIAN_SEARCH_API || "https://christian-search-ai.onrender.com/";
+const CHRISTIAN_SEARCH_API = (
+  process.env.CHRISTIAN_SEARCH_API || "https://christian-search-ai.onrender.com"
+).replace(/\/+$/, "");
 
 const BAD_GENRE_IDS = new Set([
   27, // Horror
@@ -371,6 +372,8 @@ async function searchChristianBackend(query: string) {
 
   const data = (await response.json()) as {
     results?: ChristianSearchItem[];
+    count?: number;
+    query?: string;
   };
 
   const results = (data.results || []).map((item, index): OutputMovie => ({
