@@ -1,27 +1,22 @@
 import { NextResponse } from "next/server";
-import dbConnect from "@/lib/mongodb";
-import Movie from "@/models/Movie";
+import clientPromise from "@/lib/mongodb";
 
 export async function GET() {
   try {
-    await dbConnect();
+    const client = await clientPromise;
+    const db = client.db("clearstream");
 
-    const count = await Movie.countDocuments();
+    const count = await db.collection("movies").countDocuments();
 
     return NextResponse.json({
-      success: true,
-      message: "MongoDB connected successfully",
+      ok: true,
       movieCount: count,
     });
-
   } catch (error) {
-    console.error("Database error:", error);
+    console.error(error);
 
     return NextResponse.json(
-      {
-        success: false,
-        message: "Database connection failed",
-      },
+      { ok: false, error: "DB failed" },
       { status: 500 }
     );
   }
