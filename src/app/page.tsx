@@ -354,6 +354,7 @@ function getRippleConfidence(
 export default function HomePage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Movie[]>([]);
+  const [homeMovies, setHomeMovies] = useState<Movie[]>([]);
   const [loading, setLoading] = useState(false);
   const [familyFriendlyOn, setFamilyFriendlyOn] = useState(false);
   const [noRRatedOn, setNoRRatedOn] = useState(false);
@@ -372,11 +373,41 @@ export default function HomePage() {
   const [reviewLoadingMovieId, setReviewLoadingMovieId] = useState<number | null>(null);
   const pondRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const pondTrackRef = useRef<HTMLDivElement | null>(null);
+  const loadFaithMovies = async () => {
+  try {
+    const res = await fetch("/api/faith", {
+      cache: "no-store",
+    });
 
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to load faith movies");
+    }
+
+    const movies: Movie[] = Array.isArray(data.movies)
+      ? data.movies.map((m: any, i: number) => ({
+          id: m.tmdbId || i + 1,
+          title: m.title || "Untitled",
+          overview: m.notes || "From ClearStream database",
+          poster_path: m.poster_path,
+          release_date: m.release_date,
+          certification: m.familySafe ? "G" : undefined,
+          source: "mongo",
+        }))
+      : [];
+
+    setHomeMovies(movies);
+  } catch (err) {
+    console.error("faith load error", err);
+  }
+};
   useEffect(() => {
     setRecentlyViewed(
       safeLocalStorageGet<Movie[]>("clearstream_recently_viewed", [])
     );
+ 
+    loadFaithMovies();
 
     const loadFavorites = async () => {
       try {
@@ -414,8 +445,10 @@ export default function HomePage() {
   }, [recentlyViewed]);
 
   const displayedResults = useMemo(() => {
-    return hasSearched ? results : PLACEHOLDER_MOVIES;
-  }, [hasSearched, results]);
+  if (hasSearched) return results;
+  if (homeMovies.length > 0) return homeMovies;
+  return PLACEHOLDER_MOVIES;
+  }, [hasSearched, results, homeMovies]);
 
   const selectedCategoryData = useMemo(() => {
     return CATEGORIES.find((category) => category.key === selectedCategory) || null;
@@ -857,44 +890,63 @@ const deleteMovieReview = async (movieId: number) => {
   };
 
   const handleWatchNow = async () => {
-    const fallbackTerm =
-      getFallbackSearchTerm() ||
-      (familyFriendlyOn
-        ? randomFrom(["toy story", "frozen", "finding nemo", "shrek", "paddington"])
-        : randomFrom(["avengers", "avatar", "inception", "gladiator", "interstellar"]));
+  const typedQuery = query.trim();
+  const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
 
-    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+  const fallbackTerm =
+    familyFriendlyOn
+      ? randomFrom([
+          "toy story",
+          "frozen",
+          "finding nemo",
+          "paddington",
+          "winnie the pooh",
+          "mary poppins",
+          "the lion king",
+        ])
+      : randomFrom([
+          "avengers",
+          "avatar",
+          "inception",
+          "gladiator",
+          "interstellar",
+          "top gun",
+          "mission impossible",
+        ]);
 
-    await fetchMovies({
-      searchTerm:
-        mongoCategory ||
-        (query.trim() ||
-        (!selectedCategoryData?.genreId && !selectedCategoryData?.anyGenre))
-          ? mongoCategory
-            ? undefined
-            : fallbackTerm
+  const shouldUseAnyGenreFallback =
+    !typedQuery &&
+    !mongoCategory &&
+    !selectedCategoryData?.genreId &&
+    !selectedCategoryData?.anyGenre;
+
+  await fetchMovies({
+    searchTerm: mongoCategory
+      ? undefined
+      : typedQuery
+        ? typedQuery
+        : shouldUseAnyGenreFallback
+          ? fallbackTerm
           : undefined,
-      genreId:
-        mongoCategory || (!query.trim() && !selectedCategoryData?.anyGenre)
-          ? mongoCategory
-            ? undefined
-            : selectedCategoryData?.genreId
-          : undefined,
-      mongoCategory,
-      mode: "watchNow",
-      limit: 8,
-      message: `Searching thousands of titles for the best Watch Now picks in ${
-        selectedCategoryData?.label || "all categories"
-      }...`,
-      gOnly: Boolean(
-        selectedCategoryData?.gOnly ||
-          (selectedCategoryData?.anyGenre && familyFriendlyOn)
-      ),
-      excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-      anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
-      randomize: true,
-    });
-  };
+    genreId:
+      mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+        ? undefined
+        : selectedCategoryData?.genreId,
+    mongoCategory,
+    mode: "watchNow",
+    limit: 12,
+    message: `Searching thousands of titles for the best Watch Now picks in ${
+      selectedCategoryData?.label || "all categories"
+    }...`,
+    gOnly: Boolean(
+      selectedCategoryData?.gOnly ||
+        (selectedCategoryData?.anyGenre && familyFriendlyOn)
+    ),
+    excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
+    anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
+    randomize: true,
+  });
+};
 
   const handleBestDeal = async () => {
     const fallbackTerm =
