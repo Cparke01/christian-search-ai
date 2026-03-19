@@ -179,7 +179,7 @@ const CATEGORIES: Category[] = [
     key: "mystery",
     label: "Mystery",
     genreId: "9648",
-    fallbackQuery: "best mystery detective movies",
+    fallbackQuery: "family mystery adventure movies",
     excludedGenreIds: ["27"],
   },
   {
@@ -351,10 +351,23 @@ function getRippleConfidence(
   };
 }
 
+function mergeUniqueMovies(primary: Movie[], secondary: Movie[]) {
+  const seen = new Set<string>();
+  const merged: Movie[] = [];
+
+  for (const movie of [...primary, ...secondary]) {
+    const key = `${movie.id}-${movie.title.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(movie);
+  }
+
+  return merged;
+}
+
 export default function HomePage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Movie[]>([]);
-  const [homeMovies, setHomeMovies] = useState<Movie[]>([]);
   const [loading, setLoading] = useState(false);
   const [familyFriendlyOn, setFamilyFriendlyOn] = useState(false);
   const [noRRatedOn, setNoRRatedOn] = useState(false);
@@ -373,41 +386,11 @@ export default function HomePage() {
   const [reviewLoadingMovieId, setReviewLoadingMovieId] = useState<number | null>(null);
   const pondRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const pondTrackRef = useRef<HTMLDivElement | null>(null);
-  const loadFaithMovies = async () => {
-  try {
-    const res = await fetch("/api/faith", {
-      cache: "no-store",
-    });
 
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to load faith movies");
-    }
-
-    const movies: Movie[] = Array.isArray(data.movies)
-      ? data.movies.map((m: any, i: number) => ({
-          id: m.tmdbId || i + 1,
-          title: m.title || "Untitled",
-          overview: m.notes || "From ClearStream database",
-          poster_path: m.poster_path,
-          release_date: m.release_date,
-          certification: m.familySafe ? "G" : undefined,
-          source: "mongo",
-        }))
-      : [];
-
-    setHomeMovies(movies);
-  } catch (err) {
-    console.error("faith load error", err);
-  }
-};
   useEffect(() => {
     setRecentlyViewed(
       safeLocalStorageGet<Movie[]>("clearstream_recently_viewed", [])
     );
- 
-    loadFaithMovies();
 
     const loadFavorites = async () => {
       try {
@@ -445,10 +428,8 @@ export default function HomePage() {
   }, [recentlyViewed]);
 
   const displayedResults = useMemo(() => {
-  if (hasSearched) return results;
-  if (homeMovies.length > 0) return homeMovies;
-  return PLACEHOLDER_MOVIES;
-  }, [hasSearched, results, homeMovies]);
+    return hasSearched ? results : PLACEHOLDER_MOVIES;
+  }, [hasSearched, results]);
 
   const selectedCategoryData = useMemo(() => {
     return CATEGORIES.find((category) => category.key === selectedCategory) || null;
@@ -527,142 +508,148 @@ export default function HomePage() {
     }
   };
 
-   const addRecentlyViewed = async (movie: Movie) => {
-  try {
-    const res = await fetch("/api/history", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId: DEV_USER_ID,
-        movieId: movie.id,
-        title: movie.title,
-        poster_path: movie.poster_path,
-        release_date: movie.release_date,
-      }),
-    });
+  const addRecentlyViewed = async (movie: Movie) => {
+    try {
+      const res = await fetch("/api/history", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: DEV_USER_ID,
+          movieId: movie.id,
+          title: movie.title,
+          poster_path: movie.poster_path,
+          release_date: movie.release_date,
+        }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to update history");
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update history");
+      }
+
+      setRecentlyViewed((prev) => {
+        const deduped = prev.filter((item) => item.id !== movie.id);
+        return [movie, ...deduped].slice(0, 16);
+      });
+    } catch (err) {
+      console.error("History update failed:", err);
+      setError(err instanceof Error ? err.message : "History action failed");
     }
-
-    setRecentlyViewed((prev) => {
-      const deduped = prev.filter((item) => item.id !== movie.id);
-      return [movie, ...deduped].slice(0, 16);
-    });
-  } catch (err) {
-    console.error("History update failed:", err);
-    setError(err instanceof Error ? err.message : "History action failed");
-  }
-};
+  };
 
   const isFavorite = (movieId: number) => {
     return favorites.some((movie) => movie.id === movieId);
   };
+
   const getMovieRating = (movieId: number) => {
-  return userReviews[movieId]?.rating || 0;
-};
+    return userReviews[movieId]?.rating || 0;
+  };
 
-const getMovieReviewText = (movieId: number) => {
-  if (reviewDrafts[movieId] !== undefined) {
-    return reviewDrafts[movieId];
-  }
-  return userReviews[movieId]?.review || "";
-};
-
-const setMovieReviewDraft = (movieId: number, value: string) => {
-  setReviewDrafts((prev) => ({
-    ...prev,
-    [movieId]: value,
-  }));
-};
-
-const saveMovieReview = async (movie: Movie, rating: number, reviewText?: string) => {
-  try {
-    setReviewLoadingMovieId(movie.id);
-
-    const res = await fetch("/api/reviews", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId: DEV_USER_ID,
-        movieId: movie.id,
-        title: movie.title,
-        rating,
-        review: reviewText ?? getMovieReviewText(movie.id),
-        poster_path: movie.poster_path,
-        release_date: movie.release_date,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to save review");
+  const getMovieReviewText = (movieId: number) => {
+    if (reviewDrafts[movieId] !== undefined) {
+      return reviewDrafts[movieId];
     }
+    return userReviews[movieId]?.review || "";
+  };
 
-    const savedReview: UserReview = data.review;
-
-    setUserReviews((prev) => ({
-      ...prev,
-      [movie.id]: savedReview,
-    }));
-
+  const setMovieReviewDraft = (movieId: number, value: string) => {
     setReviewDrafts((prev) => ({
       ...prev,
-      [movie.id]: savedReview.review || "",
+      [movieId]: value,
     }));
-  } catch (err) {
-    console.error("Review save failed:", err);
-    setError(err instanceof Error ? err.message : "Review save failed");
-  } finally {
-    setReviewLoadingMovieId(null);
-  }
-};
+  };
 
-const deleteMovieReview = async (movieId: number) => {
-  try {
-    setReviewLoadingMovieId(movieId);
+  const saveMovieReview = async (
+    movie: Movie,
+    rating: number,
+    reviewText?: string
+  ) => {
+    try {
+      setReviewLoadingMovieId(movie.id);
 
-    const res = await fetch("/api/reviews", {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId: DEV_USER_ID,
-        movieId,
-      }),
-    });
+      const res = await fetch("/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: DEV_USER_ID,
+          movieId: movie.id,
+          title: movie.title,
+          rating,
+          review: reviewText ?? getMovieReviewText(movie.id),
+          poster_path: movie.poster_path,
+          release_date: movie.release_date,
+        }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (!res.ok) {
-      throw new Error(data.error || "Failed to delete review");
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save review");
+      }
+
+      const savedReview: UserReview = data.review;
+
+      setUserReviews((prev) => ({
+        ...prev,
+        [movie.id]: savedReview,
+      }));
+
+      setReviewDrafts((prev) => ({
+        ...prev,
+        [movie.id]: savedReview.review || "",
+      }));
+    } catch (err) {
+      console.error("Review save failed:", err);
+      setError(err instanceof Error ? err.message : "Review save failed");
+    } finally {
+      setReviewLoadingMovieId(null);
     }
+  };
 
-    setUserReviews((prev) => {
-      const next = { ...prev };
-      delete next[movieId];
-      return next;
-    });
+  const deleteMovieReview = async (movieId: number) => {
+    try {
+      setReviewLoadingMovieId(movieId);
 
-    setReviewDrafts((prev) => ({
-      ...prev,
-      [movieId]: "",
-    }));
-  } catch (err) {
-    console.error("Review delete failed:", err);
-    setError(err instanceof Error ? err.message : "Review delete failed");
-  } finally {
-    setReviewLoadingMovieId(null);
-  }
- };
+      const res = await fetch("/api/reviews", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: DEV_USER_ID,
+          movieId,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete review");
+      }
+
+      setUserReviews((prev) => {
+        const next = { ...prev };
+        delete next[movieId];
+        return next;
+      });
+
+      setReviewDrafts((prev) => ({
+        ...prev,
+        [movieId]: "",
+      }));
+    } catch (err) {
+      console.error("Review delete failed:", err);
+      setError(err instanceof Error ? err.message : "Review delete failed");
+    } finally {
+      setReviewLoadingMovieId(null);
+    }
+  };
+
   const fetchMovies = async ({
     searchTerm,
     genreId,
@@ -696,6 +683,7 @@ const deleteMovieReview = async (movieId: number) => {
       setSearchMessage(message);
 
       const effectiveFamily = forceFamily || familyFriendlyOn;
+      let mongoResults: Movie[] = [];
 
       if (mongoCategory) {
         const mongoParams = new URLSearchParams();
@@ -716,7 +704,7 @@ const deleteMovieReview = async (movieId: number) => {
           ? mongoData.movies
           : [];
 
-        let normalizedMovies: Movie[] = dbMovies.map((movie, index) => {
+        mongoResults = dbMovies.map((movie, index) => {
           const matchedPlaceholder = PLACEHOLDER_MOVIES.find(
             (placeholder) => placeholder.id === movie.tmdbId
           );
@@ -742,11 +730,13 @@ const deleteMovieReview = async (movieId: number) => {
         });
 
         if (randomize || mode === "surprise" || mode === "familyNight") {
-          normalizedMovies = shuffleItems(normalizedMovies);
+          mongoResults = shuffleItems(mongoResults);
         }
 
-        setResults(normalizedMovies.slice(0, limit));
-        return;
+        if (mongoResults.length >= limit) {
+          setResults(mongoResults.slice(0, limit));
+          return;
+        }
       }
 
       const params = new URLSearchParams();
@@ -809,14 +799,19 @@ const deleteMovieReview = async (movieId: number) => {
         throw new Error(data.error || "Search failed");
       }
 
-      const nextResults = Array.isArray(data.results)
+      const tmdbResults = Array.isArray(data.results)
         ? (data.results as Movie[]).map((movie) => ({
             ...movie,
             source: "tmdb" as const,
           }))
         : [];
 
-      setResults(nextResults);
+      const combinedResults =
+        mongoResults.length > 0
+          ? mergeUniqueMovies(mongoResults, tmdbResults)
+          : tmdbResults;
+
+      setResults(combinedResults.slice(0, limit));
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Something went wrong";
@@ -842,13 +837,11 @@ const deleteMovieReview = async (movieId: number) => {
   const handleSearch = async () => {
     const searchTerm = getFallbackSearchTerm();
     const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
-    const shouldUseMysteryFallback = selectedCategoryData?.key === "mystery";
 
     const genreId =
       !query.trim() &&
       !selectedCategoryData?.anyGenre &&
-      !mongoCategory &&
-      !shouldUseMysteryFallback
+      !mongoCategory
         ? selectedCategoryData?.genreId
         : undefined;
 
@@ -872,7 +865,7 @@ const deleteMovieReview = async (movieId: number) => {
           ? undefined
           : query.trim()
             ? searchTerm
-            : shouldUseMysteryFallback || !selectedCategoryData?.genreId
+            : !selectedCategoryData?.genreId
               ? searchTerm
               : undefined,
       genreId: mongoCategory ? undefined : genreId,
@@ -881,7 +874,9 @@ const deleteMovieReview = async (movieId: number) => {
       limit: 12,
       message: searchTerm
         ? `Searching thousands of titles for the best matches for "${searchTerm}"...`
-        : `Searching thousands of titles in ${selectedCategoryData?.label || "the selected category"}...`,
+        : `Searching thousands of titles in ${
+            selectedCategoryData?.label || "the selected category"
+          }...`,
       gOnly,
       excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
       anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
@@ -890,69 +885,75 @@ const deleteMovieReview = async (movieId: number) => {
   };
 
   const handleWatchNow = async () => {
-  const typedQuery = query.trim();
-  const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const typedQuery = query.trim();
+    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
 
-  const fallbackTerm =
-    familyFriendlyOn
-      ? randomFrom([
-          "toy story",
-          "frozen",
-          "finding nemo",
-          "paddington",
-          "winnie the pooh",
-          "mary poppins",
-          "the lion king",
-        ])
-      : randomFrom([
-          "avengers",
-          "avatar",
-          "inception",
-          "gladiator",
-          "interstellar",
-          "top gun",
-          "mission impossible",
-        ]);
+    const fallbackTerm =
+      familyFriendlyOn
+        ? randomFrom([
+            "toy story",
+            "frozen",
+            "finding nemo",
+            "paddington",
+            "winnie the pooh",
+            "mary poppins",
+            "the lion king",
+          ])
+        : randomFrom([
+            "avengers",
+            "avatar",
+            "inception",
+            "gladiator",
+            "interstellar",
+            "top gun",
+            "mission impossible",
+          ]);
 
-  const shouldUseAnyGenreFallback =
-    !typedQuery &&
-    !mongoCategory &&
-    !selectedCategoryData?.genreId &&
-    !selectedCategoryData?.anyGenre;
+    const shouldUseAnyGenreFallback =
+      !typedQuery &&
+      !mongoCategory &&
+      !selectedCategoryData?.genreId &&
+      !selectedCategoryData?.anyGenre;
 
-  await fetchMovies({
-    searchTerm: mongoCategory
-      ? undefined
-      : typedQuery
-        ? typedQuery
-        : shouldUseAnyGenreFallback
-          ? fallbackTerm
-          : undefined,
-    genreId:
-      mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+    await fetchMovies({
+      searchTerm: mongoCategory
         ? undefined
-        : selectedCategoryData?.genreId,
-    mongoCategory,
-    mode: "watchNow",
-    limit: 12,
-    message: `Searching thousands of titles for the best Watch Now picks in ${
-      selectedCategoryData?.label || "all categories"
-    }...`,
-    gOnly: Boolean(
-      selectedCategoryData?.gOnly ||
-        (selectedCategoryData?.anyGenre && familyFriendlyOn)
-    ),
-    excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-    anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
-    randomize: true,
-  });
-};
+        : typedQuery
+          ? typedQuery
+          : shouldUseAnyGenreFallback
+            ? fallbackTerm
+            : undefined,
+      genreId:
+        mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+          ? undefined
+          : selectedCategoryData?.genreId,
+      mongoCategory,
+      mode: "watchNow",
+      limit: 12,
+      message: `Searching thousands of titles for the best Watch Now picks in ${
+        selectedCategoryData?.label || "all categories"
+      }...`,
+      gOnly: Boolean(
+        selectedCategoryData?.gOnly ||
+          (selectedCategoryData?.anyGenre && familyFriendlyOn)
+      ),
+      excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
+      anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
+      randomize: true,
+    });
+  };
 
   const handleBestDeal = async () => {
     const fallbackTerm =
       getFallbackSearchTerm() ||
       (familyFriendlyOn
-        ? randomFrom(["frozen", "toy story", "paddington", "finding nemo", "shrek"])
+        ? randomFrom([
+            "frozen",
+            "toy story",
+            "paddington",
+            "finding nemo",
+            "shrek",
+          ])
         : randomFrom([
             "batman",
             "rocky",
@@ -1040,7 +1041,13 @@ const deleteMovieReview = async (movieId: number) => {
     const fallbackTerm =
       getFallbackSearchTerm() ||
       (familyFriendlyOn
-        ? randomFrom(["toy story", "frozen", "finding nemo", "shrek", "paddington"])
+        ? randomFrom([
+            "toy story",
+            "frozen",
+            "finding nemo",
+            "shrek",
+            "paddington",
+          ])
         : randomFrom([
             "inception",
             "interstellar",
@@ -1093,17 +1100,15 @@ const deleteMovieReview = async (movieId: number) => {
     const shouldUseFallbackOnly =
       !mongoCategory && !category.anyGenre && !category.genreId;
 
-    const shouldUseMysteryFallback = category.key === "mystery";
-
     await fetchMovies({
       searchTerm:
         mongoCategory || category.anyGenre
           ? undefined
-          : shouldUseMysteryFallback || shouldUseFallbackOnly
+          : shouldUseFallbackOnly
             ? category.fallbackQuery
             : undefined,
       genreId:
-        mongoCategory || category.anyGenre || shouldUseMysteryFallback
+        mongoCategory || category.anyGenre
           ? undefined
           : category.genreId,
       mongoCategory,
@@ -1466,93 +1471,99 @@ const deleteMovieReview = async (movieId: number) => {
                           )}
                         </div>
 
-                         <p className="mt-4 text-sm leading-6 text-slate-300">
-  {movie.overview && movie.overview.trim().length > 0
-    ? movie.overview
-    : "Overview unavailable."}
-</p>
+                        <p className="mt-4 text-sm leading-6 text-slate-300">
+                          {movie.overview && movie.overview.trim().length > 0
+                            ? movie.overview
+                            : "Overview unavailable."}
+                        </p>
 
-<div className="mt-5 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
-  <div className="flex items-center justify-between gap-3">
-    <p className="text-sm font-semibold text-slate-200">Your Rating</p>
-    {getMovieRating(movie.id) > 0 && (
-      <span className="text-xs text-slate-400">
-        Saved: {getMovieRating(movie.id)}/5
-      </span>
-    )}
-  </div>
+                        <div className="mt-5 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-slate-200">
+                              Your Rating
+                            </p>
+                            {getMovieRating(movie.id) > 0 && (
+                              <span className="text-xs text-slate-400">
+                                Saved: {getMovieRating(movie.id)}/5
+                              </span>
+                            )}
+                          </div>
 
-  <div className="mt-3 flex flex-wrap gap-2">
-    {[1, 2, 3, 4, 5].map((star) => {
-      const active = star <= getMovieRating(movie.id);
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {[1, 2, 3, 4, 5].map((star) => {
+                              const active = star <= getMovieRating(movie.id);
 
-      return (
-        <button
-          key={`${movie.id}-star-${star}`}
-          type="button"
-          onClick={() => saveMovieReview(movie, star)}
-          disabled={reviewLoadingMovieId === movie.id}
-          className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
-            active
-              ? "border-yellow-300/50 bg-yellow-500/15 text-yellow-200"
-              : "border-slate-600 bg-slate-800 text-slate-200 hover:border-cyan-400/50"
-          }`}
-          title={`Rate ${star} out of 5`}
-        >
-          {active ? "★" : "☆"} {star}
-        </button>
-      );
-    })}
-  </div>
+                              return (
+                                <button
+                                  key={`${movie.id}-star-${star}`}
+                                  type="button"
+                                  onClick={() => saveMovieReview(movie, star)}
+                                  disabled={reviewLoadingMovieId === movie.id}
+                                  className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
+                                    active
+                                      ? "border-yellow-300/50 bg-yellow-500/15 text-yellow-200"
+                                      : "border-slate-600 bg-slate-800 text-slate-200 hover:border-cyan-400/50"
+                                  }`}
+                                  title={`Rate ${star} out of 5`}
+                                >
+                                  {active ? "★" : "☆"} {star}
+                                </button>
+                              );
+                            })}
+                          </div>
 
-  <div className="mt-4">
-    <label
-      htmlFor={`review-${movie.id}`}
-      className="mb-2 block text-sm font-semibold text-slate-200"
-    >
-      Short Review
-    </label>
+                          <div className="mt-4">
+                            <label
+                              htmlFor={`review-${movie.id}`}
+                              className="mb-2 block text-sm font-semibold text-slate-200"
+                            >
+                              Short Review
+                            </label>
 
-    <textarea
-      id={`review-${movie.id}`}
-      value={getMovieReviewText(movie.id)}
-      onChange={(e) => setMovieReviewDraft(movie.id, e.target.value)}
-      placeholder="Write a short note about this movie..."
-      className="min-h-[88px] w-full rounded-xl border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
-    />
+                            <textarea
+                              id={`review-${movie.id}`}
+                              value={getMovieReviewText(movie.id)}
+                              onChange={(e) =>
+                                setMovieReviewDraft(movie.id, e.target.value)
+                              }
+                              placeholder="Write a short note about this movie..."
+                              className="min-h-[88px] w-full rounded-xl border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+                            />
 
-    <div className="mt-3 flex flex-wrap gap-3">
-      <button
-        type="button"
-        onClick={() =>
-          saveMovieReview(
-            movie,
-            getMovieRating(movie.id) || 5,
-            getMovieReviewText(movie.id)
-          )
-        }
-        disabled={reviewLoadingMovieId === movie.id}
-        className="inline-flex items-center rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-60"
-      >
-        {reviewLoadingMovieId === movie.id ? "Saving..." : "Save Review"}
-      </button>
+                            <div className="mt-3 flex flex-wrap gap-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  saveMovieReview(
+                                    movie,
+                                    getMovieRating(movie.id) || 5,
+                                    getMovieReviewText(movie.id)
+                                  )
+                                }
+                                disabled={reviewLoadingMovieId === movie.id}
+                                className="inline-flex items-center rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-60"
+                              >
+                                {reviewLoadingMovieId === movie.id
+                                  ? "Saving..."
+                                  : "Save Review"}
+                              </button>
 
-      {getMovieRating(movie.id) > 0 && (
-        <button
-          type="button"
-          onClick={() => deleteMovieReview(movie.id)}
-          disabled={reviewLoadingMovieId === movie.id}
-          className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400/50 disabled:opacity-60"
-        >
-          Remove Review
-        </button>
-      )}
-    </div>
-  </div>
-</div>
+                              {getMovieRating(movie.id) > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteMovieReview(movie.id)}
+                                  disabled={reviewLoadingMovieId === movie.id}
+                                  className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400/50 disabled:opacity-60"
+                                >
+                                  Remove Review
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
 
-            {hasSearched && (
-               <div className="mt-4">
+                        {hasSearched && (
+                          <div className="mt-4">
                             <p className="text-sm font-semibold text-slate-200">
                               Provider Status
                             </p>
@@ -1564,10 +1575,14 @@ const deleteMovieReview = async (movieId: number) => {
                                     key={`${movie.id}-${provider.name}-${index}`}
                                     className="inline-block rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200"
                                   >
-                                    {provider.type === "stream" && `Stream on ${provider.name}`}
-                                    {provider.type === "free" && `Free on ${provider.name}`}
-                                    {provider.type === "rent" && `Rent on ${provider.name}`}
-                                    {provider.type === "buy" && `Buy on ${provider.name}`}
+                                    {provider.type === "stream" &&
+                                      `Stream on ${provider.name}`}
+                                    {provider.type === "free" &&
+                                      `Free on ${provider.name}`}
+                                    {provider.type === "rent" &&
+                                      `Rent on ${provider.name}`}
+                                    {provider.type === "buy" &&
+                                      `Buy on ${provider.name}`}
                                   </span>
                                 ))}
                               </div>
@@ -1577,7 +1592,8 @@ const deleteMovieReview = async (movieId: number) => {
                                   Provider data not available.
                                 </p>
                                 <p className="text-sm text-amber-200">
-                                  Ripple is uncertain about watch options for this movie.
+                                  Ripple is uncertain about watch options for this
+                                  movie.
                                 </p>
                               </div>
                             )}
