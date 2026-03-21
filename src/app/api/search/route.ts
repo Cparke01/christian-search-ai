@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import clientPromise from "@/lib/mongodb";
 
 type TmdbMovie = {
   id: number;
@@ -44,6 +45,16 @@ type ChristianSearchItem = {
   url?: string;
 };
 
+type FaithMovieRecord = {
+  _id?: unknown;
+  title?: string;
+  source?: string;
+  link?: string | null;
+  poster?: string | null;
+  familySafe?: boolean;
+  tags?: string[];
+};
+
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const CHRISTIAN_SEARCH_API = (
@@ -79,11 +90,144 @@ const BANNED_WORDS = [
   "horror",
 ];
 
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  animals: [
+    "animal",
+    "animals",
+    "dog",
+    "dogs",
+    "cat",
+    "cats",
+    "horse",
+    "horses",
+    "lion",
+    "lions",
+    "bear",
+    "bears",
+    "dolphin",
+    "whale",
+    "wildlife",
+    "zoo",
+    "pet",
+    "pets",
+    "farm",
+    "ranch",
+  ],
+  sports: [
+    "sports",
+    "sport",
+    "football",
+    "baseball",
+    "basketball",
+    "soccer",
+    "hockey",
+    "tennis",
+    "golf",
+    "boxing",
+    "wrestling",
+    "racing",
+    "swimming",
+    "runner",
+    "track",
+    "gymnastics",
+    "dance",
+    "rodeo",
+  ],
+  christian: [
+    "christian",
+    "faith",
+    "bible",
+    "jesus",
+    "church",
+    "gospel",
+    "prayer",
+    "pastor",
+    "ministry",
+    "scripture",
+    "missionary",
+  ],
+  preschool: [
+    "preschool",
+    "toddler",
+    "little kids",
+    "learning",
+    "alphabet",
+    "numbers",
+    "train",
+    "friendly",
+    "nursery",
+    "school",
+    "playground",
+  ],
+  childrens: [
+    "children",
+    "children's",
+    "kids",
+    "kid",
+    "family",
+    "adventure",
+    "animated",
+    "magic",
+    "friendship",
+  ],
+  realpeople: [
+    "live action",
+    "biography",
+    "family",
+    "people",
+    "human",
+    "inspirational",
+    "drama",
+  ],
+  fantasy: [
+    "fantasy",
+    "magic",
+    "wizard",
+    "castle",
+    "dragon",
+    "kingdom",
+    "fairy",
+    "enchanted",
+  ],
+  mystery: [
+    "mystery",
+    "detective",
+    "clue",
+    "investigation",
+    "secret",
+    "missing",
+    "case",
+    "puzzle",
+  ],
+  scifi: [
+    "science fiction",
+    "space",
+    "alien",
+    "future",
+    "robot",
+    "galaxy",
+    "starship",
+    "time travel",
+  ],
+};
+
 function uniqueById<T extends { id: number }>(items: T[]): T[] {
   const seen = new Set<number>();
   return items.filter((item) => {
     if (seen.has(item.id)) return false;
     seen.add(item.id);
+    return true;
+  });
+}
+
+function uniqueByTitle<T extends { title: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    const key = item.title.trim().toLowerCase();
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -115,7 +259,80 @@ function containsBannedWords(text: string) {
   return BANNED_WORDS.some((word) => normalized.includes(word));
 }
 
-function isFamilySafeTitle(movie: TmdbMovie, options?: { family?: boolean; isMysteryGenre?: boolean }) {
+function normalizeRating(value?: string) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function getProviderPriorityScore(movie: OutputMovie) {
+  const providers = movie.providers || [];
+  if (providers.some((p) => p.type === "free")) return 4;
+  if (providers.some((p) => p.type === "stream")) return 3;
+  if (providers.some((p) => p.type === "rent")) return 2;
+  if (providers.some((p) => p.type === "buy")) return 1;
+  return 0;
+}
+
+function getCertificationPriorityScore(movie: OutputMovie, family: boolean) {
+  const cert = normalizeRating(movie.certification);
+
+  if (cert === "G") return 5;
+  if (cert === "PG") return 4;
+  if (cert === "NR" || cert === "UNRATED" || cert === "NOT RATED") {
+    return family ? 3 : 2;
+  }
+  if (cert === "PG-13") return family ? 0 : 2;
+  if (cert === "R" || cert === "NC-17" || cert === "TV-MA" || cert === "MA") {
+    return 0;
+  }
+
+  return family ? 2 : 1;
+}
+
+function getSourcePriorityScore(movie: OutputMovie) {
+  if (movie.source === "christian-ai") return 2;
+  if (movie.source === "tmdb") return 1;
+  return 0;
+}
+
+function compareOutputMovies(
+  a: OutputMovie,
+  b: OutputMovie,
+  options?: {
+    family?: boolean;
+    preferProviders?: boolean;
+    preferFaith?: boolean;
+  }
+) {
+  const preferProviders = options?.preferProviders ?? true;
+  const preferFaith = options?.preferFaith ?? false;
+  const family = options?.family ?? false;
+
+  if (preferProviders) {
+    const providerScoreDiff =
+      getProviderPriorityScore(b) - getProviderPriorityScore(a);
+    if (providerScoreDiff !== 0) return providerScoreDiff;
+  }
+
+  if (preferFaith) {
+    const sourceScoreDiff = getSourcePriorityScore(b) - getSourcePriorityScore(a);
+    if (sourceScoreDiff !== 0) return sourceScoreDiff;
+  }
+
+  const certScoreDiff =
+    getCertificationPriorityScore(b, family) -
+    getCertificationPriorityScore(a, family);
+  if (certScoreDiff !== 0) return certScoreDiff;
+
+  const voteDiff = (b.vote_average || 0) - (a.vote_average || 0);
+  if (voteDiff !== 0) return voteDiff;
+
+  return a.title.localeCompare(b.title);
+}
+
+function isFamilySafeTitle(
+  movie: TmdbMovie,
+  options?: { family?: boolean; isMysteryGenre?: boolean }
+) {
   const title = movie.title || "";
   const overview = movie.overview || "";
 
@@ -128,26 +345,20 @@ function isFamilySafeTitle(movie: TmdbMovie, options?: { family?: boolean; isMys
 function passesGenreRules(
   movie: TmdbMovie,
   excludedGenreIds: number[],
-  family: boolean,
-  isMysteryGenre: boolean,
+  family: boolean
 ) {
   const genreIds = movie.genre_ids || [];
 
-  if (excludedGenreIds.length > 0 && genreIds.some((id) => excludedGenreIds.includes(id))) {
+  if (
+    excludedGenreIds.length > 0 &&
+    genreIds.some((id) => excludedGenreIds.includes(id))
+  ) {
     return false;
   }
 
   if (family) {
     const blockedGenres = genreIds.filter((id) => BAD_GENRE_IDS.has(id));
-
-    if (blockedGenres.length > 0) {
-      return false;
-    }
-
-    // For family mystery, allow thriller/crime overlap if the main genre is mystery.
-    if (!isMysteryGenre && genreIds.includes(9648) === false) {
-      // no-op, just explicit for clarity
-    }
+    if (blockedGenres.length > 0) return false;
   }
 
   return true;
@@ -157,7 +368,7 @@ function passesBasicMovieRules(
   movie: TmdbMovie,
   minVoteCount: number,
   minVoteAverage: number,
-  options?: { family?: boolean; isMysteryGenre?: boolean },
+  options?: { family?: boolean; isMysteryGenre?: boolean }
 ) {
   if (!movie.id || !movie.title) return false;
   if (movie.adult) return false;
@@ -165,6 +376,38 @@ function passesBasicMovieRules(
   if ((movie.vote_average || 0) < minVoteAverage) return false;
   if (!isFamilySafeTitle(movie, options)) return false;
   return true;
+}
+
+function keywordScore(text: string, keywords: string[]) {
+  const haystack = text.toLowerCase();
+  let score = 0;
+  for (const keyword of keywords) {
+    if (haystack.includes(keyword.toLowerCase())) score += 1;
+  }
+  return score;
+}
+
+function inferKeywordPack(params: { q: string; genre: string }) {
+  const q = params.q.toLowerCase();
+  const genre = params.genre;
+
+  if (genre === "9648" || q.includes("mystery")) return CATEGORY_KEYWORDS.mystery;
+  if (genre === "878" || q.includes("sci") || q.includes("space")) return CATEGORY_KEYWORDS.scifi;
+  if (genre === "14" || q.includes("fantasy") || q.includes("magic")) return CATEGORY_KEYWORDS.fantasy;
+  if (q.includes("animal") || q.includes("dog") || q.includes("horse") || q.includes("lion")) {
+    return CATEGORY_KEYWORDS.animals;
+  }
+  if (q.includes("sport") || q.includes("football") || q.includes("baseball")) {
+    return CATEGORY_KEYWORDS.sports;
+  }
+  if (q.includes("christian") || q.includes("faith") || q.includes("jesus") || q.includes("bible")) {
+    return CATEGORY_KEYWORDS.christian;
+  }
+  if (q.includes("preschool") || q.includes("toddler")) return CATEGORY_KEYWORDS.preschool;
+  if (q.includes("children") || q.includes("kids")) return CATEGORY_KEYWORDS.childrens;
+  if (q.includes("real people") || q.includes("live action")) return CATEGORY_KEYWORDS.realpeople;
+
+  return [];
 }
 
 async function tmdbFetch<T>(path: string) {
@@ -198,8 +441,8 @@ async function getCertification(movieId: number, region: string) {
 
     const match = data.results?.find((r) => r.iso_3166_1 === region);
     const cert =
-      match?.release_dates.find((r) => r.certification && r.certification.trim())?.certification ||
-      "";
+      match?.release_dates.find((r) => r.certification && r.certification.trim())
+        ?.certification || "";
 
     return cert.trim();
   } catch {
@@ -251,7 +494,10 @@ async function getProviders(movieId: number, region: string) {
 
     const deduped = providers.filter(
       (provider, index, array) =>
-        index === array.findIndex((p) => p.name === provider.name && p.type === provider.type),
+        index ===
+        array.findIndex(
+          (p) => p.name === provider.name && p.type === provider.type
+        )
     );
 
     let priceStatus = "Price unavailable from current data source.";
@@ -283,7 +529,7 @@ function ratingAllowed(
   certification: string,
   allowedRatings: string[],
   excludedRatings: string[],
-  family: boolean,
+  family: boolean
 ) {
   const normalized = certification.trim().toUpperCase();
 
@@ -313,7 +559,7 @@ async function enrichMovie(
   region: string,
   allowedRatings: string[],
   excludedRatings: string[],
-  family: boolean,
+  family: boolean
 ): Promise<OutputMovie | null> {
   const certification = await getCertification(movie.id, region);
 
@@ -341,7 +587,7 @@ async function enrichMovie(
 async function searchMoviesByQuery(query: string, page = 1) {
   const encoded = encodeURIComponent(query);
   return tmdbFetch<TmdbSearchResponse>(
-    `/search/movie?query=${encoded}&include_adult=false&page=${page}`,
+    `/search/movie?query=${encoded}&include_adult=false&page=${page}`
   );
 }
 
@@ -365,14 +611,7 @@ async function discoverMovies(params: {
   if (params.family) {
     searchParams.set("certification_country", params.region);
     searchParams.set("certification.lte", "PG");
-
-    // Do not block mystery globally here.
-    if (params.genre === "9648") {
-      searchParams.set("without_genres", "27,10752");
-    } else {
-      searchParams.set("without_genres", "27,10752");
-    }
-
+    searchParams.set("without_genres", "27,10752");
     searchParams.set("sort_by", "popularity.desc");
   } else if (params.mode === "bestDeal" || params.mode === "watchNow") {
     searchParams.set("sort_by", "popularity.desc");
@@ -382,7 +621,9 @@ async function discoverMovies(params: {
     searchParams.set("sort_by", "popularity.desc");
   }
 
-  return tmdbFetch<TmdbSearchResponse>(`/discover/movie?${searchParams.toString()}`);
+  return tmdbFetch<TmdbSearchResponse>(
+    `/discover/movie?${searchParams.toString()}`
+  );
 }
 
 async function searchChristianBackend(query: string) {
@@ -394,7 +635,9 @@ async function searchChristianBackend(query: string) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Christian backend request failed: ${response.status} ${text}`);
+    throw new Error(
+      `Christian backend request failed: ${response.status} ${text}`
+    );
   }
 
   const data = (await response.json()) as {
@@ -422,6 +665,203 @@ async function searchChristianBackend(query: string) {
   return results;
 }
 
+async function getMongoFaithMatches(
+  query: string,
+  limit = 30
+): Promise<OutputMovie[]> {
+  try {
+    const client = await clientPromise;
+    const db = client.db("clearstream");
+
+    const trimmed = query.trim();
+    const regex = trimmed ? new RegExp(trimmed, "i") : undefined;
+
+    const filter: Record<string, unknown> = {
+      familySafe: true,
+    };
+
+    if (regex) {
+      filter.$or = [
+        { title: { $regex: regex } },
+        { source: { $regex: regex } },
+        { tags: { $elemMatch: { $regex: regex } } },
+      ];
+    }
+
+    const docs = await db
+      .collection<FaithMovieRecord>("faith_movies")
+      .find(filter)
+      .limit(limit)
+      .toArray();
+
+    return docs.map((movie, index) => ({
+      id: 800000 + index,
+      title: movie.title || "Untitled",
+      overview: `Faith and family title from ${movie.source || "ClearStream library"}.`,
+      poster_path: movie.poster || undefined,
+      release_date: "",
+      certification: undefined,
+      vote_average: undefined,
+      providers: movie.link
+        ? [{ name: movie.source || "Faith Library", type: "stream" }]
+        : [],
+      providerLink: movie.link || undefined,
+      priceStatus:
+        movie.tags && movie.tags.length > 0
+          ? movie.tags.join(", ")
+          : movie.source || "Faith library title",
+      source: "christian-ai",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function buildTmdbResults(params: {
+  q: string;
+  genre: string;
+  region: string;
+  mode: string;
+  family: boolean;
+  limit: number;
+  minVoteCount: number;
+  minVoteAverage: number;
+  allowedRatings: string[];
+  excludedRatings: string[];
+  excludedGenreIds: number[];
+  randomize: boolean;
+  isMysteryGenre: boolean;
+}) {
+  const keywordPack = inferKeywordPack({ q: params.q, genre: params.genre });
+  const tmdbCandidates: TmdbMovie[] = [];
+
+  if (params.q.trim().length > 0) {
+    const queries = [params.q.trim()];
+
+    if (keywordPack.length > 0) {
+      queries.push(`${params.q} ${keywordPack.slice(0, 3).join(" ")}`);
+      queries.push(keywordPack.slice(0, 4).join(" "));
+    }
+
+    const searchResponses = await Promise.all(
+      queries.flatMap((query) => [
+        searchMoviesByQuery(query, 1),
+        searchMoviesByQuery(query, 2),
+      ])
+    );
+
+    for (const response of searchResponses) {
+      tmdbCandidates.push(...(response.results || []));
+    }
+  } else {
+    const discoverResponses = await Promise.all([
+      discoverMovies({
+        genre: params.genre || undefined,
+        region: params.region,
+        page: 1,
+        family: params.family,
+        mode: params.mode,
+      }),
+      discoverMovies({
+        genre: params.genre || undefined,
+        region: params.region,
+        page: 2,
+        family: params.family,
+        mode: params.mode,
+      }),
+      discoverMovies({
+        genre: params.genre || undefined,
+        region: params.region,
+        page: 3,
+        family: params.family,
+        mode: params.mode,
+      }),
+      discoverMovies({
+        genre: params.genre || undefined,
+        region: params.region,
+        page: 4,
+        family: params.family,
+        mode: params.mode,
+      }),
+    ]);
+
+    for (const response of discoverResponses) {
+      tmdbCandidates.push(...(response.results || []));
+    }
+  }
+
+  const dedupedCandidates = uniqueById(
+    tmdbCandidates.filter((movie): movie is TmdbMovie => Boolean(movie?.id))
+  );
+
+  const filtered = dedupedCandidates
+    .filter((movie) => {
+      if (
+        !passesBasicMovieRules(movie, params.minVoteCount, params.minVoteAverage, {
+          family: params.family,
+          isMysteryGenre: params.isMysteryGenre,
+        })
+      ) {
+        return false;
+      }
+
+      if (!passesGenreRules(movie, params.excludedGenreIds, params.family)) {
+        return false;
+      }
+
+      const haystack = `${movie.title || ""} ${movie.overview || ""}`.toLowerCase();
+      if (params.family && containsBannedWords(haystack)) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      if (keywordPack.length === 0) {
+        return (b.vote_average || 0) - (a.vote_average || 0);
+      }
+
+      const aScore = keywordScore(`${a.title} ${a.overview || ""}`, keywordPack);
+      const bScore = keywordScore(`${b.title} ${b.overview || ""}`, keywordPack);
+
+      if (bScore !== aScore) return bScore - aScore;
+      return (b.vote_average || 0) - (a.vote_average || 0);
+    });
+
+  const enriched = await Promise.all(
+    filtered
+      .slice(0, Math.max(params.limit * 5, 50))
+      .map((movie) =>
+        enrichMovie(
+          movie,
+          params.region,
+          params.allowedRatings,
+          params.excludedRatings,
+          params.family
+        )
+      )
+  );
+
+  let results = enriched.filter((movie): movie is OutputMovie => Boolean(movie));
+
+  results = uniqueById(results);
+  results = uniqueByTitle(results);
+
+  results.sort((a, b) =>
+    compareOutputMovies(a, b, {
+      family: params.family,
+      preferProviders: params.mode === "watchNow" || params.mode === "bestDeal",
+      preferFaith: false,
+    })
+  );
+
+  if (params.randomize) {
+    results = shuffleArray(results);
+  }
+
+  return results.slice(0, params.limit);
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -437,155 +877,94 @@ export async function GET(request: NextRequest) {
     const family = searchParams.get("family") === "true";
     const randomize = searchParams.get("randomize") === "true";
 
-    const limit = Math.max(1, Math.min(Number(searchParams.get("limit") || "8"), 20));
+    const limit = Math.max(1, Math.min(Number(searchParams.get("limit") || "8"), 40));
     const minVoteCount = Math.max(0, Number(searchParams.get("minVoteCount") || "0"));
     const minVoteAverage = Math.max(0, Number(searchParams.get("minVoteAverage") || "0"));
 
-    const excludedGenreIds = parseCsvParam(searchParams.get("excludeGenres")).map((v) => Number(v));
     const allowedRatings = parseCsvParam(searchParams.get("allowedRatings"));
     const excludedRatings = parseCsvParam(searchParams.get("excludeRatings"));
+    const excludedGenreIds = parseCsvParam(searchParams.get("excludeGenres"))
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id));
 
-    if (mode === "christian") {
-      if (!q) {
-        return NextResponse.json({ results: [] });
-      }
+    const excludeTitles = parseCsvParam(searchParams.get("excludeTitles")).map((t) =>
+      t.toLowerCase()
+    );
+    const excludeIds = parseCsvParam(searchParams.get("excludeIds"));
 
-      const christianResults = await searchChristianBackend(q);
-      return NextResponse.json({
-        results: christianResults.slice(0, limit),
+    const useChristian = searchParams.get("useChristian") === "true";
+    const includeFaith = searchParams.get("includeFaith") === "true" || useChristian;
+
+    let tmdbResults: OutputMovie[] = [];
+    let christianResults: OutputMovie[] = [];
+    let mongoFaithResults: OutputMovie[] = [];
+
+    if (!useChristian || !q) {
+      tmdbResults = await buildTmdbResults({
+        q,
+        genre,
+        region,
+        mode,
+        family,
+        limit: Math.max(limit * 2, 16),
+        minVoteCount,
+        minVoteAverage,
+        allowedRatings,
+        excludedRatings,
+        excludedGenreIds,
+        randomize: false,
+        isMysteryGenre,
       });
     }
 
-    if (!TMDB_API_KEY) {
-      return NextResponse.json(
-        { error: "TMDB_API_KEY is missing in environment variables" },
-        { status: 500 },
-      );
-    }
-
-    let rawMovies: TmdbMovie[] = [];
-
-    if (q) {
-      const [page1, page2] = await Promise.all([
-        searchMoviesByQuery(q, 1),
-        searchMoviesByQuery(q, 2),
+    if (includeFaith && q) {
+      const [backendResults, mongoResults] = await Promise.all([
+        searchChristianBackend(q).catch(() => []),
+        getMongoFaithMatches(q, Math.max(limit * 2, 20)).catch(() => []),
       ]);
 
-      rawMovies = [...(page1.results || []), ...(page2.results || [])];
-    } else {
-      const [page1, page2, page3] = await Promise.all([
-        discoverMovies({ genre, region, page: 1, family, mode }),
-        discoverMovies({ genre, region, page: 2, family, mode }),
-        discoverMovies({ genre, region, page: 3, family, mode }),
-      ]);
-
-      rawMovies = [
-        ...(page1.results || []),
-        ...(page2.results || []),
-        ...(page3.results || []),
-      ];
+      christianResults = backendResults;
+      mongoFaithResults = mongoResults;
     }
 
-    let filtered = uniqueById(rawMovies).filter((movie) => {
-      if (
-        !passesBasicMovieRules(movie, minVoteCount, minVoteAverage, {
-          family,
-          isMysteryGenre,
-        })
-      ) {
-        return false;
-      }
+    let combined = [...tmdbResults, ...mongoFaithResults, ...christianResults];
 
-      if (!passesGenreRules(movie, excludedGenreIds, family, isMysteryGenre)) {
-        return false;
-      }
+    combined = uniqueByTitle(combined);
+    combined = uniqueById(combined);
 
+    combined = combined.filter((movie) => {
+      if (excludeIds.includes(String(movie.id))) return false;
+      if (excludeTitles.includes(movie.title.trim().toLowerCase())) return false;
       return true;
     });
 
-    if (mode === "family" || mode === "familyNight") {
-      filtered = filtered.filter((movie) => {
-        const genres = movie.genre_ids || [];
-        const badGenre = genres.some((id) => BAD_GENRE_IDS.has(id));
-        if (badGenre) return false;
-
-        const text = `${movie.title || ""} ${movie.overview || ""}`.toLowerCase();
-
-        if (!isMysteryGenre && containsBannedWords(text)) return false;
-
-        return true;
-      });
-
-      filtered = shuffleArray(filtered).slice(0, 24);
-    } else if (randomize) {
-      filtered = shuffleArray(filtered);
-    }
-
-    const candidateMovies = filtered.slice(0, Math.max(limit * 3, 24));
-
-    const enriched = await Promise.all(
-      candidateMovies.map((movie) =>
-        enrichMovie(movie, region, allowedRatings, excludedRatings, family),
-      ),
+    combined.sort((a, b) =>
+      compareOutputMovies(a, b, {
+        family,
+        preferProviders: mode === "watchNow" || mode === "bestDeal",
+        preferFaith: includeFaith && Boolean(q),
+      })
     );
 
-    let results = enriched.filter((movie): movie is OutputMovie => Boolean(movie));
-
-    if (mode === "family" || mode === "familyNight") {
-      results = results.filter((movie) => {
-        const cert = (movie.certification || "").toUpperCase();
-        if (cert && cert !== "G" && cert !== "PG" && cert !== "NR") {
-          return false;
-        }
-
-        const text = `${movie.title || ""} ${movie.overview || ""}`.toLowerCase();
-        if (!isMysteryGenre && containsBannedWords(text)) return false;
-
-        return true;
-      });
-
-      results = shuffleArray(results).slice(0, 8);
+    if (randomize) {
+      combined = shuffleArray(combined);
     }
 
-    if (mode === "watchNow") {
-      const withWatchOptions = results.filter((movie) =>
-        movie.providers?.some(
-          (provider) => provider.type === "free" || provider.type === "stream",
-        ),
-      );
-
-      if (withWatchOptions.length > 0) {
-        results = withWatchOptions;
-      }
-    }
-
-    if (mode === "bestDeal") {
-      const sorted = [...results].sort((a, b) => {
-        const score = (movie: OutputMovie) => {
-          if (movie.providers?.some((p) => p.type === "free")) return 4;
-          if (movie.providers?.some((p) => p.type === "stream")) return 3;
-          if (movie.providers?.some((p) => p.type === "rent")) return 2;
-          if (movie.providers?.some((p) => p.type === "buy")) return 1;
-          return 0;
-        };
-        return score(b) - score(a);
-      });
-
-      results = sorted;
-    }
-
-    if (randomize && mode !== "bestDeal" && mode !== "family" && mode !== "familyNight") {
-      results = shuffleArray(results);
-    }
-
-    results = results.slice(0, limit);
+    const results = combined.slice(0, limit);
 
     return NextResponse.json({
       results,
+      count: results.length,
+      q,
+      genre,
+      region,
+      mode,
+      family,
+      randomize,
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Unexpected server error";
+      error instanceof Error ? error.message : "Unknown search error";
 
     return NextResponse.json({ error: message }, { status: 500 });
   }

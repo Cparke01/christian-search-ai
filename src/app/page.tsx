@@ -14,11 +14,14 @@ type Movie = {
   poster_path?: string;
   release_date?: string;
   certification?: string;
+  customRating?: string;
   vote_average?: number;
   providers?: ProviderInfo[];
   providerLink?: string;
   priceStatus?: string;
-  source?: "tmdb" | "mongo";
+  source?: "tmdb" | "mongo" | "christian-ai";
+  familySafe?: boolean;
+  notes?: string;
 };
 
 type UserReview = {
@@ -89,6 +92,21 @@ type Category = {
 };
 
 const DEV_USER_ID = "devUser1";
+const FAMILY_SAFE_POSTER_PLACEHOLDER = "/images/poster-fallback.png";
+
+const PROVIDER_PRIORITY: Record<ProviderInfo["type"], number> = {
+  free: 4,
+  stream: 3,
+  rent: 2,
+  buy: 1,
+};
+
+const PROVIDER_LABELS: Record<ProviderInfo["type"], string> = {
+  free: "Free",
+  stream: "Subscription",
+  rent: "Rent",
+  buy: "Buy",
+};
 
 const MONGO_CATEGORY_MAP: Partial<Record<CategoryKey, string>> = {
   realpeople: "realpeople",
@@ -103,7 +121,7 @@ const CATEGORIES: Category[] = [
   {
     key: "anygenre",
     label: "Any Genre",
-    fallbackQuery: "",
+    fallbackQuery: "popular family movies adventure comedy fantasy animation",
     anyGenre: true,
   },
   {
@@ -145,18 +163,19 @@ const CATEGORIES: Category[] = [
   {
     key: "animals",
     label: "Animal Movies",
-    fallbackQuery: "best family animal adventure movies",
+    fallbackQuery: "animal family movies dogs horses wildlife kids",
   },
   {
     key: "childrensnook",
     label: "Children's Nook",
-    fallbackQuery: "best G rated kids movies ages 5 to 12",
+    fallbackQuery: "G rated children family animated adventure movies",
     gOnly: true,
   },
   {
     key: "preschool",
     label: "Preschool Playground",
-    fallbackQuery: "best G rated preschool movies for little kids",
+    fallbackQuery:
+      "preschool toddler little kids thomas train mister rogers peppa pig daniel tiger sesame learning",
     gOnly: true,
   },
   {
@@ -168,12 +187,13 @@ const CATEGORIES: Category[] = [
   {
     key: "christian",
     label: "Christian",
-    fallbackQuery: "best christian family movies and documentaries",
+    fallbackQuery: "faith christian bible jesus family movies documentaries",
   },
   {
     key: "sports",
     label: "Sports",
-    fallbackQuery: "best sports movies and documentaries",
+    fallbackQuery:
+      "sports family inspirational football baseball basketball soccer hockey swimming tennis rodeo dance documentaries",
   },
   {
     key: "mystery",
@@ -200,6 +220,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 6.7,
     release_date: "1970",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 630,
@@ -210,6 +231,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 7.6,
     release_date: "1939",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 18660,
@@ -220,6 +242,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 6.4,
     release_date: "1975",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 11,
@@ -230,6 +253,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 8.2,
     release_date: "1977",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 862,
@@ -240,6 +264,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 8.3,
     release_date: "1995",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 19490,
@@ -250,6 +275,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 7.4,
     release_date: "1947",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 1585,
@@ -260,6 +286,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 8.3,
     release_date: "1946",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
   {
     id: 8587,
@@ -270,6 +297,7 @@ const PLACEHOLDER_MOVIES: Movie[] = [
     vote_average: 8.3,
     release_date: "1994",
     source: "tmdb",
+    providers: [{ name: "Catalog", type: "stream" }],
   },
 ];
 
@@ -286,8 +314,53 @@ function shuffleItems<T>(items: T[]): T[] {
   return clone;
 }
 
+function cleanMovieTitle(title?: string) {
+  if (!title) return "Untitled";
+
+  return title
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.(html|php|aspx?|jsp)$/i, "")
+    .replace(/[-_/]+/g, " ")
+    .replace(
+      /\b(home|index|movie|movies|watch|stream|title|detail|details)\b/gi,
+      " "
+    )
+    .replace(/\b(www|http|https|com|org|net)\b/gi, " ")
+    .replace(/\s+\|\s+.*$/g, "")
+    .replace(/\s+-\s+.*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function cleanOverview(text?: string) {
+  if (!text) return "";
+
+  return text
+    .replace(/\s{2,}/g, " ")
+    .replace(/\b(read more|click here|watch now|view details)\b/gi, "")
+    .trim();
+}
+
+function normalizeMovie(movie: Movie): Movie {
+  return {
+    ...movie,
+    title: cleanMovieTitle(movie.title),
+    overview: cleanOverview(movie.overview),
+    providers: Array.isArray(movie.providers) ? movie.providers : [],
+    providerLink:
+      typeof movie.providerLink === "string" && movie.providerLink.trim()
+        ? movie.providerLink.trim()
+        : undefined,
+    priceStatus:
+      typeof movie.priceStatus === "string" && movie.priceStatus.trim()
+        ? movie.priceStatus.trim()
+        : undefined,
+  };
+}
+
 function getPosterUrl(path?: string) {
-  if (!path) return "/images/poster-fallback.png";
+  if (!path) return FAMILY_SAFE_POSTER_PLACEHOLDER;
   if (path.startsWith("http")) return path;
   if (path.startsWith("/images/")) return path;
   return `https://image.tmdb.org/t/p/w500${path}`;
@@ -313,6 +386,66 @@ function safeLocalStorageSet<T>(key: string, value: T) {
   }
 }
 
+function getNormalizedRating(movie: Movie) {
+  return String(movie.certification || movie.customRating || "")
+    .toUpperCase()
+    .trim();
+}
+
+function isNotRatedLike(movie: Movie) {
+  const rating = getNormalizedRating(movie);
+
+  return (
+    rating === "" ||
+    rating === "NR" ||
+    rating === "UNRATED" ||
+    rating === "NOT RATED" ||
+    rating === "UNR"
+  );
+}
+
+function shouldUseFamilyPlaceholderPoster(
+  movie: Movie,
+  familyFriendlyOn: boolean
+) {
+  if (!familyFriendlyOn) return false;
+  return isNotRatedLike(movie);
+}
+
+function getDisplayPosterUrl(movie: Movie, familyFriendlyOn: boolean) {
+  if (shouldUseFamilyPlaceholderPoster(movie, familyFriendlyOn)) {
+    return FAMILY_SAFE_POSTER_PLACEHOLDER;
+  }
+  return getPosterUrl(movie.poster_path);
+}
+
+function isExcludedBySafetyFilters(
+  movie: Movie,
+  options: {
+    noRRatedOn: boolean;
+    noPg13On: boolean;
+  }
+) {
+  const rating = getNormalizedRating(movie);
+
+  if (options.noRRatedOn) {
+    if (
+      rating === "R" ||
+      rating === "NC-17" ||
+      rating === "TV-MA" ||
+      rating === "MA"
+    ) {
+      return true;
+    }
+  }
+
+  if (options.noPg13On && rating === "PG-13") {
+    return true;
+  }
+
+  return false;
+}
+
 function getRippleConfidence(
   movie: Movie,
   options: {
@@ -322,12 +455,13 @@ function getRippleConfidence(
   }
 ) {
   const hasProviders = Boolean(movie.providers && movie.providers.length > 0);
-  const cert = (movie.certification || "").toUpperCase();
+  const cert = getNormalizedRating(movie);
 
   if (
     hasProviders &&
     (cert === "G" ||
       cert === "PG" ||
+      cert === "NR" ||
       options.familyFriendlyOn ||
       options.gOnly ||
       options.activeMode === "familyNight")
@@ -355,14 +489,217 @@ function mergeUniqueMovies(primary: Movie[], secondary: Movie[]) {
   const seen = new Set<string>();
   const merged: Movie[] = [];
 
-  for (const movie of [...primary, ...secondary]) {
-    const key = `${movie.id}-${movie.title.toLowerCase()}`;
+  for (const rawMovie of [...primary, ...secondary]) {
+    const movie = normalizeMovie(rawMovie);
+    const cleanTitle = cleanMovieTitle(movie.title).toLowerCase();
+    const year = (movie.release_date || "").slice(0, 4);
+    const key = year ? `${cleanTitle}-${year}` : cleanTitle;
+
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(movie);
   }
 
   return merged;
+}
+
+function getCategoryPlaceholderFallback(
+  category: CategoryKey | null,
+  limit: number
+): Movie[] {
+  if (!category) {
+    return PLACEHOLDER_MOVIES.slice(0, limit);
+  }
+
+  const filtered = PLACEHOLDER_MOVIES.filter((movie) => {
+    const title = movie.title.toLowerCase();
+    const overview = (movie.overview || "").toLowerCase();
+
+    switch (category) {
+      case "animals":
+        return (
+          title.includes("lion") ||
+          overview.includes("animal") ||
+          overview.includes("wild")
+        );
+      case "childrensnook":
+      case "preschool":
+        return movie.certification === "G" || title.includes("toy");
+      case "christian":
+        return (
+          title.includes("bishop") ||
+          title.includes("wonderful") ||
+          overview.includes("christmas")
+        );
+      case "sports":
+        return false;
+      case "western":
+        return title.includes("chisum") || title.includes("apple dumpling");
+      case "fantasy":
+        return title.includes("wizard") || title.includes("bishop");
+      case "animation":
+        return title.includes("toy") || title.includes("lion");
+      case "scifi":
+        return title.includes("star wars");
+      case "mystery":
+        return (
+          title.includes("wizard") ||
+          title.includes("wonderful") ||
+          overview.includes("mystery")
+        );
+      case "documentary":
+        return overview.includes("classic") || overview.includes("family");
+      default:
+        return true;
+    }
+  });
+
+  return (filtered.length > 0 ? filtered : PLACEHOLDER_MOVIES).slice(0, limit);
+}
+
+function getCategoryFallbackQuery(
+  category: Category | null,
+  familyFriendlyOn: boolean
+) {
+  if (!category) return "";
+
+  if (category.key === "anygenre") {
+    return familyFriendlyOn
+      ? "popular family movies adventure fantasy comedy animation"
+      : "popular movies adventure comedy drama action fantasy";
+  }
+
+  return category.fallbackQuery;
+}
+
+function getSortedProviders(providers?: ProviderInfo[]) {
+  return [...(providers || [])]
+    .filter((provider) => provider.name?.trim())
+    .sort((a, b) => {
+      const priorityDiff =
+        PROVIDER_PRIORITY[b.type] - PROVIDER_PRIORITY[a.type];
+      if (priorityDiff !== 0) return priorityDiff;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function getGroupedProviders(providers?: ProviderInfo[]) {
+  const grouped: Record<ProviderInfo["type"], string[]> = {
+    free: [],
+    stream: [],
+    rent: [],
+    buy: [],
+  };
+
+  for (const provider of getSortedProviders(providers)) {
+    if (!grouped[provider.type].includes(provider.name)) {
+      grouped[provider.type].push(provider.name);
+    }
+  }
+
+  return grouped;
+}
+
+function getProviderPriorityValue(movie: Movie) {
+  const providers = getSortedProviders(movie.providers);
+
+  if (providers.some((provider) => provider.type === "free")) return 4;
+  if (providers.some((provider) => provider.type === "stream")) return 3;
+  if (providers.some((provider) => provider.type === "rent")) return 2;
+  if (providers.some((provider) => provider.type === "buy")) return 1;
+  return 0;
+}
+
+function getProviderTypeChips(movie: Movie) {
+  const providers = getSortedProviders(movie.providers);
+  const presentTypes = new Set<ProviderInfo["type"]>();
+
+  for (const provider of providers) {
+    presentTypes.add(provider.type);
+  }
+
+  return (["free", "stream", "rent", "buy"] as ProviderInfo["type"][]).filter(
+    (type) => presentTypes.has(type)
+  );
+}
+
+function getBestProviderSummary(movie: Movie) {
+  const topProvider = getSortedProviders(movie.providers)[0];
+
+  if (!topProvider) {
+    return movie.priceStatus || "Provider data unavailable";
+  }
+
+  switch (topProvider.type) {
+    case "free":
+      return `Best way to watch: Free on ${topProvider.name}`;
+    case "stream":
+      return `Best way to watch: Subscription on ${topProvider.name}`;
+    case "rent":
+      return `Best way to watch: Rent on ${topProvider.name}`;
+    case "buy":
+      return `Best way to watch: Buy on ${topProvider.name}`;
+    default:
+      return movie.priceStatus || "Provider data unavailable";
+  }
+}
+
+function getPrimaryActionLabel(movie: Movie) {
+  const topProvider = getSortedProviders(movie.providers)[0];
+
+  switch (topProvider?.type) {
+    case "free":
+      return "Watch Free";
+    case "stream":
+      return "Stream Now";
+    case "rent":
+      return "Rent";
+    case "buy":
+      return "Buy";
+    default:
+      return "Watch Now";
+  }
+}
+
+function sortMoviesForDisplay(
+  items: Movie[],
+  options: { randomize: boolean; mode: ActiveMode }
+) {
+  const normalized = items.map((movie) => normalizeMovie(movie));
+
+  if (
+    options.randomize &&
+    options.mode !== "watchNow" &&
+    options.mode !== "bestDeal"
+  ) {
+    return shuffleItems(normalized);
+  }
+
+  return [...normalized].sort((a, b) => {
+    const providerDiff =
+      getProviderPriorityValue(b) - getProviderPriorityValue(a);
+    if (providerDiff !== 0) return providerDiff;
+
+    const voteDiff = (b.vote_average || 0) - (a.vote_average || 0);
+    if (voteDiff !== 0) return voteDiff;
+
+    return cleanMovieTitle(a.title)
+      .toLowerCase()
+      .localeCompare(cleanMovieTitle(b.title).toLowerCase());
+  });
+}
+
+function shouldUseTextFallback(
+  category: Category | null,
+  typedQuery: string,
+  mongoCategory?: string
+) {
+  if (typedQuery) return true;
+  if (mongoCategory) return true;
+  if (!category) return true;
+  if (category.anyGenre) return true;
+  if (!category.genreId) return true;
+  return false;
 }
 
 export default function HomePage() {
@@ -376,20 +713,37 @@ export default function HomePage() {
   const [activeMode, setActiveMode] = useState<ActiveMode>("idle");
   const [hasSearched, setHasSearched] = useState(false);
   const [searchMessage, setSearchMessage] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<CategoryKey | null>(null);
+  const [selectedCategory, setSelectedCategory] =
+    useState<CategoryKey | null>(null);
   const [rippleJumpSeed, setRippleJumpSeed] = useState(0);
   const [favorites, setFavorites] = useState<Movie[]>([]);
   const [recentlyViewed, setRecentlyViewed] = useState<Movie[]>([]);
-  const [rippleOffset, setRippleOffset] = useState(0);
-  const [userReviews, setUserReviews] = useState<Record<number, UserReview>>({});
+  const [hiddenTitles, setHiddenTitles] = useState<string[]>([]);
+  const [hiddenMovieIds, setHiddenMovieIds] = useState<number[]>([]);
+  const [ripplePosition, setRipplePosition] = useState({ x: 0, y: 0 });
+  const [userReviews, setUserReviews] = useState<Record<number, UserReview>>(
+    {}
+  );
   const [reviewDrafts, setReviewDrafts] = useState<Record<number, string>>({});
   const [reviewLoadingMovieId, setReviewLoadingMovieId] = useState<number | null>(null);
+  const [reviewExpanded, setReviewExpanded] = useState<Record<number, boolean>>({});
+  const [providerExpanded, setProviderExpanded] = useState<Record<number, boolean>>({});
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const pondRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const pondTrackRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setRecentlyViewed(
       safeLocalStorageGet<Movie[]>("clearstream_recently_viewed", [])
+    );
+    setHiddenTitles(
+      safeLocalStorageGet<string[]>("clearstream_hidden_titles", [])
+    );
+    setHiddenMovieIds(
+      safeLocalStorageGet<number[]>("clearstream_hidden_movie_ids", [])
     );
 
     const loadFavorites = async () => {
@@ -427,17 +781,40 @@ export default function HomePage() {
     safeLocalStorageSet("clearstream_recently_viewed", recentlyViewed);
   }, [recentlyViewed]);
 
+  useEffect(() => {
+    safeLocalStorageSet("clearstream_hidden_titles", hiddenTitles);
+  }, [hiddenTitles]);
+
+  useEffect(() => {
+    safeLocalStorageSet("clearstream_hidden_movie_ids", hiddenMovieIds);
+  }, [hiddenMovieIds]);
+
   const displayedResults = useMemo(() => {
-    return hasSearched ? results : PLACEHOLDER_MOVIES;
-  }, [hasSearched, results]);
+    const baseResults = hasSearched ? results : PLACEHOLDER_MOVIES;
+    const hiddenTitleSet = new Set(hiddenTitles.map((title) => title.trim().toLowerCase()));
+    const hiddenIdSet = new Set(hiddenMovieIds);
+
+    return baseResults.filter((movie) => {
+      if (hiddenIdSet.has(movie.id)) return false;
+      return !hiddenTitleSet.has(movie.title.trim().toLowerCase());
+    });
+  }, [hasSearched, results, hiddenMovieIds, hiddenTitles]);
 
   const selectedCategoryData = useMemo(() => {
     return CATEGORIES.find((category) => category.key === selectedCategory) || null;
   }, [selectedCategory]);
 
+  const statusBadges = useMemo(() => {
+    const badges: string[] = [];
+    if (familyFriendlyOn) badges.push("Family friendly mode ON");
+    if (noRRatedOn) badges.push("No R rated titles");
+    if (noPg13On) badges.push("No PG-13 titles");
+    return badges;
+  }, [familyFriendlyOn, noPg13On, noRRatedOn]);
+
   useEffect(() => {
     if (!selectedCategory) {
-      setRippleOffset(0);
+      setRipplePosition({ x: 0, y: 0 });
       return;
     }
 
@@ -449,8 +826,10 @@ export default function HomePage() {
     const pondRect = pondEl.getBoundingClientRect();
     const trackRect = trackEl.getBoundingClientRect();
 
-    const center = pondRect.left - trackRect.left + pondRect.width / 2 - 28;
-    setRippleOffset(center);
+    setRipplePosition({
+      x: pondRect.left - trackRect.left + pondRect.width / 2 - 28,
+      y: pondRect.top - trackRect.top - 56,
+    });
   }, [selectedCategory, rippleJumpSeed]);
 
   const toggleFavorite = async (movie: Movie) => {
@@ -460,9 +839,7 @@ export default function HomePage() {
       if (exists) {
         const res = await fetch("/api/favorites", {
           method: "DELETE",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: DEV_USER_ID,
             movieId: movie.id,
@@ -470,10 +847,7 @@ export default function HomePage() {
         });
 
         const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to remove favorite");
-        }
+        if (!res.ok) throw new Error(data.error || "Failed to remove favorite");
 
         setFavorites((prev) => prev.filter((item) => item.id !== movie.id));
         return;
@@ -481,9 +855,7 @@ export default function HomePage() {
 
       const res = await fetch("/api/favorites", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: DEV_USER_ID,
           movieId: movie.id,
@@ -494,10 +866,7 @@ export default function HomePage() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to add favorite");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to add favorite");
 
       setFavorites((prev) =>
         [movie, ...prev.filter((item) => item.id !== movie.id)].slice(0, 40)
@@ -512,9 +881,7 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/history", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: DEV_USER_ID,
           movieId: movie.id,
@@ -525,10 +892,7 @@ export default function HomePage() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to update history");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to update history");
 
       setRecentlyViewed((prev) => {
         const deduped = prev.filter((item) => item.id !== movie.id);
@@ -538,6 +902,25 @@ export default function HomePage() {
       console.error("History update failed:", err);
       setError(err instanceof Error ? err.message : "History action failed");
     }
+  };
+
+  const hideMovie = (movie: Movie) => {
+    const normalizedTitle = movie.title.trim().toLowerCase();
+
+    setHiddenTitles((prev) =>
+      prev.some((title) => title.trim().toLowerCase() === normalizedTitle)
+        ? prev
+        : [...prev, movie.title]
+    );
+    setHiddenMovieIds((prev) => (prev.includes(movie.id) ? prev : [...prev, movie.id]));
+    setResults((prev) => prev.filter((item) => item.id !== movie.id));
+    setFavorites((prev) => prev.filter((item) => item.id !== movie.id));
+    setRecentlyViewed((prev) => prev.filter((item) => item.id !== movie.id));
+  };
+
+  const restoreHiddenTitles = () => {
+    setHiddenTitles([]);
+    setHiddenMovieIds([]);
   };
 
   const isFavorite = (movieId: number) => {
@@ -556,10 +939,15 @@ export default function HomePage() {
   };
 
   const setMovieReviewDraft = (movieId: number, value: string) => {
-    setReviewDrafts((prev) => ({
-      ...prev,
-      [movieId]: value,
-    }));
+    setReviewDrafts((prev) => ({ ...prev, [movieId]: value }));
+  };
+
+  const toggleReviewExpanded = (movieId: number) => {
+    setReviewExpanded((prev) => ({ ...prev, [movieId]: !prev[movieId] }));
+  };
+
+  const toggleProviderExpanded = (movieId: number) => {
+    setProviderExpanded((prev) => ({ ...prev, [movieId]: !prev[movieId] }));
   };
 
   const saveMovieReview = async (
@@ -572,9 +960,7 @@ export default function HomePage() {
 
       const res = await fetch("/api/reviews", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: DEV_USER_ID,
           movieId: movie.id,
@@ -587,10 +973,7 @@ export default function HomePage() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to save review");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to save review");
 
       const savedReview: UserReview = data.review;
 
@@ -598,10 +981,13 @@ export default function HomePage() {
         ...prev,
         [movie.id]: savedReview,
       }));
-
       setReviewDrafts((prev) => ({
         ...prev,
         [movie.id]: savedReview.review || "",
+      }));
+      setReviewExpanded((prev) => ({
+        ...prev,
+        [movie.id]: true,
       }));
     } catch (err) {
       console.error("Review save failed:", err);
@@ -617,9 +1003,7 @@ export default function HomePage() {
 
       const res = await fetch("/api/reviews", {
         method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: DEV_USER_ID,
           movieId,
@@ -627,21 +1011,15 @@ export default function HomePage() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to delete review");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to delete review");
 
       setUserReviews((prev) => {
         const next = { ...prev };
         delete next[movieId];
         return next;
       });
-
-      setReviewDrafts((prev) => ({
-        ...prev,
-        [movieId]: "",
-      }));
+      setReviewDrafts((prev) => ({ ...prev, [movieId]: "" }));
+      setReviewExpanded((prev) => ({ ...prev, [movieId]: false }));
     } catch (err) {
       console.error("Review delete failed:", err);
       setError(err instanceof Error ? err.message : "Review delete failed");
@@ -681,142 +1059,157 @@ export default function HomePage() {
       setActiveMode(mode);
       setHasSearched(true);
       setSearchMessage(message);
+      setResults([]);
 
       const effectiveFamily = forceFamily || familyFriendlyOn;
       let mongoResults: Movie[] = [];
 
       if (mongoCategory) {
-        const mongoParams = new URLSearchParams();
-        mongoParams.set("category", mongoCategory);
+        try {
+          const mongoParams = new URLSearchParams();
+          mongoParams.set("category", mongoCategory);
+          mongoParams.set("limit", String(limit * 4));
 
-        if (effectiveFamily) {
-          mongoParams.set("family", "true");
-        }
+          if (effectiveFamily) mongoParams.set("family", "true");
+          if (gOnly) mongoParams.set("gOnly", "true");
+          if (randomize) mongoParams.set("randomize", "true");
+          if (hiddenTitles.length > 0) {
+            mongoParams.set("excludeTitles", hiddenTitles.join(","));
+          }
+          if (hiddenMovieIds.length > 0) {
+            mongoParams.set("excludeIds", hiddenMovieIds.join(","));
+          }
 
-        const mongoRes = await fetch(`/api/movies?${mongoParams.toString()}`);
-        const mongoData = await mongoRes.json();
+          const mongoRes = await fetch(`/api/movies?${mongoParams.toString()}`, {
+            cache: "no-store",
+          });
+          const mongoData = await mongoRes.json().catch(() => null);
 
-        if (!mongoRes.ok) {
-          throw new Error(mongoData.error || "Database search failed");
-        }
+          if (!mongoRes.ok) {
+            throw new Error(mongoData?.error || "Database search failed");
+          }
 
-        const dbMovies: MongoMovie[] = Array.isArray(mongoData.movies)
-          ? mongoData.movies
-          : [];
+          const dbMovies: MongoMovie[] = Array.isArray(mongoData?.movies)
+            ? mongoData.movies
+            : [];
 
-        mongoResults = dbMovies.map((movie, index) => {
-          const matchedPlaceholder = PLACEHOLDER_MOVIES.find(
-            (placeholder) => placeholder.id === movie.tmdbId
-          );
+          mongoResults = dbMovies.map((movie, index) => {
+            const matchedPlaceholder = PLACEHOLDER_MOVIES.find(
+              (placeholder) => placeholder.id === movie.tmdbId
+            );
 
-          return {
-            id: movie.tmdbId || index + 1,
-            title: movie.title || "Untitled",
-            overview:
-              movie.notes ||
-              matchedPlaceholder?.overview ||
-              "Curated from the ClearStream faith and family database.",
-            poster_path: matchedPlaceholder?.poster_path,
-            release_date: matchedPlaceholder?.release_date,
-            certification:
-              matchedPlaceholder?.certification ||
-              (movie.familySafe ? "G" : undefined),
-            vote_average: matchedPlaceholder?.vote_average,
-            providers: [],
-            providerLink: undefined,
-            priceStatus: movie.customRating || "Curated by ClearStream.",
-            source: "mongo",
-          };
-        });
-
-        if (randomize || mode === "surprise" || mode === "familyNight") {
-          mongoResults = shuffleItems(mongoResults);
-        }
-
-        if (mongoResults.length >= limit) {
-          setResults(mongoResults.slice(0, limit));
-          return;
+            return normalizeMovie({
+              id: movie.tmdbId || index + 1,
+              title: movie.title || "Untitled",
+              overview:
+                movie.notes ||
+                matchedPlaceholder?.overview ||
+                "Curated from the ClearStream faith and family database.",
+              notes: movie.notes,
+              poster_path: matchedPlaceholder?.poster_path,
+              release_date: matchedPlaceholder?.release_date,
+              certification:
+                matchedPlaceholder?.certification ||
+                movie.customRating ||
+                (movie.familySafe ? "NR" : undefined),
+              customRating: movie.customRating,
+              familySafe: movie.familySafe,
+              vote_average: matchedPlaceholder?.vote_average,
+              providers: [],
+              providerLink: undefined,
+              priceStatus: movie.customRating || "Curated by ClearStream.",
+              source: "mongo",
+            });
+          });
+        } catch (err) {
+          console.error("Mongo fetch failed", err);
+          mongoResults = [];
         }
       }
 
       const params = new URLSearchParams();
       const nonce = Date.now().toString();
 
-      if (!anyGenre && searchTerm?.trim()) {
-        params.set("q", searchTerm.trim());
-      }
-
-      if (!anyGenre && genreId?.trim()) {
-        params.set("genre", genreId.trim());
-      }
-
+      if (searchTerm?.trim()) params.set("q", searchTerm.trim());
+      if (!anyGenre && genreId?.trim()) params.set("genre", genreId.trim());
       if (excludedGenreIds.length > 0) {
         params.set("excludeGenres", excludedGenreIds.join(","));
       }
 
       const excludedRatings: string[] = [];
-
-      if (noRRatedOn) {
-        excludedRatings.push("R", "NC-17", "MA", "TV-MA");
-      }
-
-      if (noPg13On) {
-        excludedRatings.push("PG-13");
-      }
-
+      if (noRRatedOn) excludedRatings.push("R", "NC-17", "MA", "TV-MA");
+      if (noPg13On) excludedRatings.push("PG-13");
       if (excludedRatings.length > 0) {
         params.set("excludeRatings", excludedRatings.join(","));
       }
+      if (hiddenTitles.length > 0) {
+        params.set("excludeTitles", hiddenTitles.join(","));
+      }
+      if (hiddenMovieIds.length > 0) {
+        params.set("excludeIds", hiddenMovieIds.join(","));
+      }
 
       params.set("family", effectiveFamily ? "true" : "false");
-
-      if (mode === "watchNow") params.set("mode", "watchNow");
-      if (mode === "bestDeal") params.set("mode", "bestDeal");
-      if (mode === "familyNight") {
-        params.set("mode", "family");
-        params.set("family", "true");
-      }
-      if (mode === "surprise") params.set("mode", "surprise");
-
-      if (gOnly) {
-        params.set("allowedRatings", "G");
-      }
-
-      if (randomize) {
-        params.set("randomize", "true");
-      }
-
+      params.set("mode", mode);
+      if (gOnly) params.set("allowedRatings", "G");
+      if (randomize) params.set("randomize", "true");
       params.set("region", "US");
-      params.set("limit", String(limit));
-      params.set("minVoteCount", "5");
-      params.set("minVoteAverage", "4.8");
+      params.set("limit", String(limit * 2));
+      params.set("minVoteCount", "3");
+      params.set("minVoteAverage", "4.0");
       params.set("nonce", nonce);
 
-      const res = await fetch(`/api/search?${params.toString()}`);
-      const data = await res.json();
+      const res = await fetch(`/api/search?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        throw new Error(data.error || "Search failed");
+        throw new Error(data?.error || "Search failed");
       }
 
-      const tmdbResults = Array.isArray(data.results)
-        ? (data.results as Movie[]).map((movie) => ({
-            ...movie,
-            source: "tmdb" as const,
-          }))
+      const searchResults = Array.isArray(data?.results)
+        ? (data.results as Movie[]).map((movie) =>
+            normalizeMovie({
+              ...movie,
+              source:
+                movie.source === "christian-ai"
+                  ? "christian-ai"
+                  : movie.source === "mongo"
+                    ? "mongo"
+                    : "tmdb",
+            })
+          )
         : [];
 
       const combinedResults =
-        mongoResults.length > 0
-          ? mergeUniqueMovies(mongoResults, tmdbResults)
-          : tmdbResults;
+        mode === "watchNow" || mode === "bestDeal"
+          ? mergeUniqueMovies(searchResults, mongoResults)
+          : mongoResults.length > 0
+            ? mergeUniqueMovies(mongoResults, searchResults)
+            : searchResults;
 
-      setResults(combinedResults.slice(0, limit));
+      const filteredBySafety = combinedResults.filter(
+        (movie) =>
+          !isExcludedBySafetyFilters(movie, { noRRatedOn, noPg13On })
+      );
+
+      const finalResults = sortMoviesForDisplay(filteredBySafety, {
+        randomize,
+        mode,
+      });
+
+      if (finalResults.length === 0) {
+        setResults(getCategoryPlaceholderFallback(selectedCategory, limit));
+        return;
+      }
+
+      setResults(finalResults.slice(0, limit));
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Something went wrong";
       setError(message);
-      setResults([]);
+      setResults(getCategoryPlaceholderFallback(selectedCategory, 8));
     } finally {
       setLoading(false);
     }
@@ -824,8 +1217,7 @@ export default function HomePage() {
 
   const getFallbackSearchTerm = () => {
     if (query.trim()) return query.trim();
-    if (selectedCategoryData) return selectedCategoryData.fallbackQuery;
-    return "";
+    return getCategoryFallbackQuery(selectedCategoryData, familyFriendlyOn);
   };
 
   const getMongoCategoryForSelection = (category?: Category | null) => {
@@ -835,11 +1227,21 @@ export default function HomePage() {
   };
 
   const handleSearch = async () => {
-    const searchTerm = getFallbackSearchTerm();
+    const typedQuery = query.trim();
     const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const fallbackSearch = getCategoryFallbackQuery(
+      selectedCategoryData,
+      familyFriendlyOn
+    );
+
+    const useTextFallback = shouldUseTextFallback(
+      selectedCategoryData,
+      typedQuery,
+      mongoCategory
+    );
 
     const genreId =
-      !query.trim() &&
+      !typedQuery &&
       !selectedCategoryData?.anyGenre &&
       !mongoCategory
         ? selectedCategoryData?.genreId
@@ -849,6 +1251,9 @@ export default function HomePage() {
       selectedCategoryData?.gOnly ||
         (selectedCategoryData?.anyGenre && familyFriendlyOn)
     );
+
+    const searchTerm =
+      typedQuery || (useTextFallback ? fallbackSearch : undefined);
 
     if (
       !searchTerm &&
@@ -860,14 +1265,7 @@ export default function HomePage() {
     }
 
     await fetchMovies({
-      searchTerm:
-        mongoCategory || (selectedCategoryData?.anyGenre && !query.trim())
-          ? undefined
-          : query.trim()
-            ? searchTerm
-            : !selectedCategoryData?.genreId
-              ? searchTerm
-              : undefined,
+      searchTerm,
       genreId: mongoCategory ? undefined : genreId,
       mongoCategory,
       mode: "search",
@@ -879,7 +1277,7 @@ export default function HomePage() {
           }...`,
       gOnly,
       excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-      anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
+      anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
       randomize: true,
     });
   };
@@ -887,42 +1285,41 @@ export default function HomePage() {
   const handleWatchNow = async () => {
     const typedQuery = query.trim();
     const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
-
-    const fallbackTerm =
+    const categoryFallback = getCategoryFallbackQuery(
+      selectedCategoryData,
       familyFriendlyOn
-        ? randomFrom([
-            "toy story",
-            "frozen",
-            "finding nemo",
-            "paddington",
-            "winnie the pooh",
-            "mary poppins",
-            "the lion king",
-          ])
-        : randomFrom([
-            "avengers",
-            "avatar",
-            "inception",
-            "gladiator",
-            "interstellar",
-            "top gun",
-            "mission impossible",
-          ]);
+    );
 
-    const shouldUseAnyGenreFallback =
-      !typedQuery &&
-      !mongoCategory &&
-      !selectedCategoryData?.genreId &&
-      !selectedCategoryData?.anyGenre;
+    const fallbackTerm = familyFriendlyOn
+      ? randomFrom([
+          "toy story",
+          "frozen",
+          "finding nemo",
+          "paddington",
+          "winnie the pooh",
+          "mary poppins",
+          "the lion king",
+        ])
+      : randomFrom([
+          "avengers",
+          "avatar",
+          "inception",
+          "gladiator",
+          "interstellar",
+          "top gun",
+          "mission impossible",
+        ]);
+
+    const useTextFallback = shouldUseTextFallback(
+      selectedCategoryData,
+      typedQuery,
+      mongoCategory
+    );
 
     await fetchMovies({
-      searchTerm: mongoCategory
-        ? undefined
-        : typedQuery
-          ? typedQuery
-          : shouldUseAnyGenreFallback
-            ? fallbackTerm
-            : undefined,
+      searchTerm:
+        typedQuery ||
+        (useTextFallback ? categoryFallback || fallbackTerm : undefined),
       genreId:
         mongoCategory || typedQuery || selectedCategoryData?.anyGenre
           ? undefined
@@ -944,6 +1341,13 @@ export default function HomePage() {
   };
 
   const handleBestDeal = async () => {
+    const typedQuery = query.trim();
+    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const categoryFallback = getCategoryFallbackQuery(
+      selectedCategoryData,
+      familyFriendlyOn
+    );
+
     const fallbackTerm =
       getFallbackSearchTerm() ||
       (familyFriendlyOn
@@ -962,23 +1366,20 @@ export default function HomePage() {
             "the matrix",
           ]));
 
-    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const useTextFallback = shouldUseTextFallback(
+      selectedCategoryData,
+      typedQuery,
+      mongoCategory
+    );
 
     await fetchMovies({
       searchTerm:
-        mongoCategory ||
-        (query.trim() ||
-        (!selectedCategoryData?.genreId && !selectedCategoryData?.anyGenre))
-          ? mongoCategory
-            ? undefined
-            : fallbackTerm
-          : undefined,
+        typedQuery ||
+        (useTextFallback ? categoryFallback || fallbackTerm : undefined),
       genreId:
-        mongoCategory || (!query.trim() && !selectedCategoryData?.anyGenre)
-          ? mongoCategory
-            ? undefined
-            : selectedCategoryData?.genreId
-          : undefined,
+        mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+          ? undefined
+          : selectedCategoryData?.genreId,
       mongoCategory,
       mode: "bestDeal",
       limit: 8,
@@ -990,15 +1391,19 @@ export default function HomePage() {
           (selectedCategoryData?.anyGenre && familyFriendlyOn)
       ),
       excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-      anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
+      anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
       randomize: true,
     });
   };
 
   const handleFamilyMovieNight = async () => {
+    const typedQuery = query.trim();
+    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const categoryFallback = getCategoryFallbackQuery(selectedCategoryData, true);
+
     const fallbackTerm =
-      query.trim() ||
-      selectedCategoryData?.fallbackQuery ||
+      typedQuery ||
+      categoryFallback ||
       randomFrom([
         "great family movies",
         "best family adventure movies",
@@ -1006,23 +1411,20 @@ export default function HomePage() {
         "great G rated family movies",
       ]);
 
-    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const useTextFallback = shouldUseTextFallback(
+      selectedCategoryData,
+      typedQuery,
+      mongoCategory
+    );
 
     await fetchMovies({
       searchTerm:
-        mongoCategory ||
-        (query.trim() ||
-        (!selectedCategoryData?.genreId && !selectedCategoryData?.anyGenre))
-          ? mongoCategory
-            ? undefined
-            : fallbackTerm
-          : undefined,
+        typedQuery ||
+        (useTextFallback ? categoryFallback || fallbackTerm : undefined),
       genreId:
-        mongoCategory || (!query.trim() && !selectedCategoryData?.anyGenre)
-          ? mongoCategory
-            ? undefined
-            : selectedCategoryData?.genreId || "10751"
-          : undefined,
+        mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+          ? undefined
+          : selectedCategoryData?.genreId || "10751",
       mongoCategory,
       mode: "familyNight",
       limit: 8,
@@ -1030,14 +1432,23 @@ export default function HomePage() {
         selectedCategoryData?.label || "family favorites"
       }...`,
       forceFamily: true,
-      gOnly: Boolean(selectedCategoryData?.gOnly || selectedCategoryData?.anyGenre),
+      gOnly: Boolean(
+        selectedCategoryData?.gOnly || selectedCategoryData?.anyGenre
+      ),
       excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-      anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
+      anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
       randomize: true,
     });
   };
 
   const handleSurpriseMe = async () => {
+    const typedQuery = query.trim();
+    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const categoryFallback = getCategoryFallbackQuery(
+      selectedCategoryData,
+      familyFriendlyOn
+    );
+
     const fallbackTerm =
       getFallbackSearchTerm() ||
       (familyFriendlyOn
@@ -1056,23 +1467,20 @@ export default function HomePage() {
             "avatar",
           ]));
 
-    const mongoCategory = getMongoCategoryForSelection(selectedCategoryData);
+    const useTextFallback = shouldUseTextFallback(
+      selectedCategoryData,
+      typedQuery,
+      mongoCategory
+    );
 
     await fetchMovies({
       searchTerm:
-        mongoCategory ||
-        (query.trim() ||
-        (!selectedCategoryData?.genreId && !selectedCategoryData?.anyGenre))
-          ? mongoCategory
-            ? undefined
-            : fallbackTerm
-          : undefined,
+        typedQuery ||
+        (useTextFallback ? categoryFallback || fallbackTerm : undefined),
       genreId:
-        mongoCategory || (!query.trim() && !selectedCategoryData?.anyGenre)
-          ? mongoCategory
-            ? undefined
-            : selectedCategoryData?.genreId
-          : undefined,
+        mongoCategory || typedQuery || selectedCategoryData?.anyGenre
+          ? undefined
+          : selectedCategoryData?.genreId,
       mongoCategory,
       mode: "surprise",
       limit: 8,
@@ -1084,7 +1492,7 @@ export default function HomePage() {
           (selectedCategoryData?.anyGenre && familyFriendlyOn)
       ),
       excludedGenreIds: selectedCategoryData?.excludedGenreIds || [],
-      anyGenre: Boolean(selectedCategoryData?.anyGenre && !query.trim()),
+      anyGenre: Boolean(selectedCategoryData?.anyGenre && !typedQuery),
       randomize: true,
     });
   };
@@ -1093,22 +1501,26 @@ export default function HomePage() {
     setSelectedCategory(category.key);
     setRippleJumpSeed((prev) => prev + 1);
 
-    const mongoCategory = !query.trim()
+    const typedQuery = query.trim();
+    const mongoCategory = !typedQuery
       ? MONGO_CATEGORY_MAP[category.key]
       : undefined;
+    const categoryFallback = getCategoryFallbackQuery(
+      category,
+      familyFriendlyOn
+    );
 
-    const shouldUseFallbackOnly =
-      !mongoCategory && !category.anyGenre && !category.genreId;
+    const useTextFallback = shouldUseTextFallback(
+      category,
+      typedQuery,
+      mongoCategory
+    );
 
     await fetchMovies({
       searchTerm:
-        mongoCategory || category.anyGenre
-          ? undefined
-          : shouldUseFallbackOnly
-            ? category.fallbackQuery
-            : undefined,
+        typedQuery || (useTextFallback ? categoryFallback || undefined : undefined),
       genreId:
-        mongoCategory || category.anyGenre
+        mongoCategory || category.anyGenre || typedQuery
           ? undefined
           : category.genreId,
       mongoCategory,
@@ -1118,22 +1530,31 @@ export default function HomePage() {
       forceFamily: familyFriendlyOn,
       gOnly: Boolean(category.gOnly || (category.anyGenre && familyFriendlyOn)),
       excludedGenreIds: category.excludedGenreIds || [],
-      anyGenre: Boolean(category.anyGenre),
+      anyGenre: Boolean(category.anyGenre && !typedQuery),
       randomize: true,
     });
   };
 
+  const handleAuthSubmit = (mode: "signin" | "signup") => {
+    setError(
+      mode === "signup"
+        ? "Sign-up UI is ready. Backend account creation still needs to be connected."
+        : "Sign-in UI is ready. Backend authentication still needs to be connected."
+    );
+  };
+
   return (
     <main className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top,_#123a73_0%,_#0b1f47_32%,_#07152f_68%,_#050d1e_100%)] text-white">
-      <div className="mx-auto w-full max-w-[1480px] px-4 py-8 md:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="mx-auto w-full max-w-[1700px] px-4 py-8 md:px-6 lg:px-10">
+        <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_360px]">
           <section className="min-w-0">
             <div className="text-center lg:text-left">
               <img
                 src="/images/clearstream-wordmark.png"
                 alt="ClearStream"
-                className="mb-2 mx-auto h-[12rem] w-auto max-w-full lg:mx-0 md:h-[16rem] lg:h-[22rem] xl:h-[26rem]"
+                className="mx-auto mb-2 h-[20rem] w-auto max-w-full md:h-[28rem] lg:mx-0 lg:h-[36rem] xl:h-[40rem]"
               />
+
               <p className="mt-2 text-lg text-slate-200 md:text-xl">
                 Find where movies are streaming instantly
               </p>
@@ -1159,114 +1580,66 @@ export default function HomePage() {
               </button>
             </div>
 
-            {recentlyViewed.length > 0 && (
-              <div className="mt-8 rounded-[28px] border border-cyan-400/15 bg-[#0d1f42]/80 p-5 backdrop-blur-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-bold text-white">Recently Viewed</h2>
-                    <p className="text-sm text-slate-300">
-                      Quick return to titles you checked recently.
-                    </p>
+            {statusBadges.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-3">
+                {statusBadges.map((badge) => (
+                  <div
+                    key={badge}
+                    className="rounded-full border border-emerald-400/30 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-200 shadow-[0_0_20px_rgba(74,222,128,0.18)]"
+                  >
+                    {badge}
                   </div>
-                </div>
-
-                <div className="flex gap-4 overflow-x-auto pb-2">
-                  {recentlyViewed.map((movie) => (
-                    <button
-                      key={`recent-${movie.id}`}
-                      onClick={() => {
-                        setResults([movie, ...results.filter((m) => m.id !== movie.id)]);
-                        setHasSearched(true);
-                      }}
-                      className="w-[140px] shrink-0 overflow-hidden rounded-2xl border border-slate-700 bg-[#10244b] text-left transition hover:border-cyan-400/40"
-                    >
-                      <img
-                        src={getPosterUrl(movie.poster_path)}
-                        alt={movie.title}
-                        className="h-[190px] w-full object-cover"
-                      />
-                      <div className="p-3 text-sm font-semibold text-white">
-                        {movie.title}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                ))}
               </div>
             )}
 
-            <div className="mt-8 overflow-hidden rounded-[28px] border border-cyan-400/20 bg-[#0d1f42]/80 p-5 backdrop-blur-sm">
-              <div className="mb-4 flex items-center gap-3">
-                <img
-                  src="/images/ripple-jump.png"
-                  alt="Ripple category guide"
-                  className="h-12 w-auto shrink-0"
-                />
-                <div className="min-w-0">
-                  <h2 className="text-lg font-bold text-white">
-                    Ripple&apos;s Genre Ponds
-                  </h2>
-                  <p className="text-sm text-slate-300">
-                    Click a pond and Ripple will jump across to search that category.
-                  </p>
-                </div>
-              </div>
-
-              <div className="pond-scroll relative overflow-x-auto pb-4">
-                <div
-                  ref={pondTrackRef}
-                  className="relative inline-flex min-w-max gap-4 px-2 pt-24"
-                >
+            <div className="mt-8">
+              <div
+                ref={pondTrackRef}
+                className="relative rounded-[28px] border border-cyan-500/15 bg-cyan-950/15 p-4 md:p-5"
+              >
+                {selectedCategory && (
                   <div
-                    className="pointer-events-none absolute left-0 top-0 h-24 w-full"
+                    className="pointer-events-none absolute z-20 transition-all duration-500"
                     style={{
-                      transform: `translateX(${rippleOffset}px)`,
-                      transition: "transform 650ms cubic-bezier(0.22, 1, 0.36, 1)",
+                      transform: `translate(${ripplePosition.x}px, ${ripplePosition.y}px)`,
                     }}
                   >
                     <img
-                      key={`${selectedCategory || "idle"}-${rippleJumpSeed}`}
+                      key={rippleJumpSeed}
                       src="/images/ripple-jump.png"
-                      alt="Ripple jumping"
-                      className="ripple-jump h-20 w-auto drop-shadow-[0_10px_18px_rgba(14,165,233,0.45)]"
+                      alt="Ripple"
+                      className="h-16 w-16 object-contain drop-shadow-[0_0_24px_rgba(34,211,238,0.55)] md:h-20 md:w-20"
                     />
                   </div>
+                )}
 
-                  {CATEGORIES.map((category) => (
-                    <button
-                      key={category.key}
-                      ref={(el) => {
-                        pondRefs.current[category.key] = el;
-                      }}
-                      onClick={() => handleCategoryClick(category)}
-                      className={`pond-button relative h-[98px] w-[130px] shrink-0 overflow-hidden border transition ${
-                        selectedCategory === category.key
-                          ? "border-cyan-100 shadow-[0_0_30px_rgba(103,232,249,0.38)]"
-                          : "border-cyan-950/60 hover:border-cyan-400/50"
-                      }`}
-                      title={category.label}
-                    >
-                      <span className="pond-depth absolute inset-0" />
-                      <span className="pond-waterline absolute inset-[6px]" />
-                      <span className="pond-shine absolute inset-0" />
-                      <span className="pond-reeds-left absolute left-2 top-3" />
-                      <span className="pond-reeds-right absolute right-2 top-2" />
-                      <span
-                        className={`absolute inset-0 ${
-                          selectedCategory === category.key
-                            ? "bg-cyan-300/10"
-                            : "bg-transparent"
+                <div className="grid grid-cols-2 gap-4 pt-8 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
+                  {CATEGORIES.map((category) => {
+                    const active = selectedCategory === category.key;
+
+                    return (
+                      <button
+                        key={category.key}
+                        ref={(el: HTMLButtonElement | null) => {
+                          pondRefs.current[category.key] = el;
+                        }}
+                        onClick={() => handleCategoryClick(category)}
+                        className={`relative min-h-[74px] rounded-full border px-5 py-4 text-center text-sm font-bold shadow-lg transition md:text-base ${
+                          active
+                            ? "scale-[1.02] border-cyan-200 bg-cyan-500 text-white shadow-[0_0_0_2px_rgba(125,211,252,0.45),0_0_28px_rgba(34,211,238,0.55),0_0_60px_rgba(59,130,246,0.22)]"
+                            : "border-cyan-400/30 bg-cyan-700/35 text-cyan-100 hover:bg-cyan-600/45 hover:shadow-[0_0_18px_rgba(34,211,238,0.18)]"
                         }`}
-                      />
-                      <span className="relative z-10 flex h-full w-full items-center justify-center px-3 text-center text-sm font-semibold leading-tight text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.65)]">
+                      >
                         {category.label}
-                      </span>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
 
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-4">
               <FeatureButton
                 label="Watch Now"
                 image="/images/ripple-watchnow.png"
@@ -1293,73 +1666,355 @@ export default function HomePage() {
               />
             </div>
 
-            <div className="mt-6 xl:hidden">
-              <FamilyFriendlyPanel
-                familyFriendlyOn={familyFriendlyOn}
-                onToggle={() => setFamilyFriendlyOn((prev) => !prev)}
-                noRRatedOn={noRRatedOn}
-                onToggleNoRRated={() => setNoRRatedOn((prev) => !prev)}
-                noPg13On={noPg13On}
-                onToggleNoPg13={() => setNoPg13On((prev) => !prev)}
-              />
-            </div>
+            {loading && (
+              <div className="mt-6 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-cyan-200">
+                {searchMessage}
+              </div>
+            )}
 
-            {(familyFriendlyOn || noRRatedOn || noPg13On || selectedCategoryData?.gOnly) && (
-              <div className="mt-4 rounded-xl border border-green-400/30 bg-green-500/10 px-4 py-3 text-sm text-green-200">
-                <div className="font-semibold">Safety filters active:</div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {familyFriendlyOn && (
-                    <span className="rounded-full border border-green-400/40 bg-green-500/10 px-3 py-1">
-                      Family Friendly active
-                    </span>
+            {error && (
+              <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-red-300">
+                {error}
+              </div>
+            )}
+
+            {!loading && !error && (
+              <div className="mt-6">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">
+                      {hasSearched ? "Results" : "Featured Picks"}
+                    </h2>
+                    <div className="mt-1 text-sm text-slate-300">
+                      {hasSearched
+                        ? `${displayedResults.length} title${
+                            displayedResults.length === 1 ? "" : "s"
+                          } shown${
+                            selectedCategoryData
+                              ? ` in ${selectedCategoryData.label}`
+                              : ""
+                          }`
+                        : "Start with a search or choose a category"}
+                    </div>
+                  </div>
+
+                  {hasSearched && searchMessage && (
+                    <div className="text-sm text-cyan-200">{searchMessage}</div>
                   )}
-                  {noRRatedOn && (
-                    <span className="rounded-full border border-amber-400/40 bg-amber-500/10 px-3 py-1">
-                      No R / NC-17 / MA / TV-MA
-                    </span>
+                  {hiddenTitles.length > 0 && (
+                    <button
+                      onClick={restoreHiddenTitles}
+                      className="rounded-full border border-slate-600 bg-slate-900/40 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800/70"
+                    >
+                      Restore hidden titles ({hiddenTitles.length})
+                    </button>
                   )}
-                  {noPg13On && (
-                    <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1">
-                      No PG-13
-                    </span>
-                  )}
-                  {selectedCategoryData?.gOnly && (
-                    <span className="rounded-full border border-pink-400/40 bg-pink-500/10 px-3 py-1">
-                      {selectedCategoryData.label}: G only
-                    </span>
-                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {displayedResults.map((movie) => {
+                    const favorite = isFavorite(movie.id);
+                    const rating = getMovieRating(movie.id);
+                    const reviewText = getMovieReviewText(movie.id);
+                    const reviewBusy = reviewLoadingMovieId === movie.id;
+                    const rippleBadge = getRippleConfidence(movie, {
+                      familyFriendlyOn,
+                      activeMode,
+                      gOnly: Boolean(
+                        selectedCategoryData?.gOnly ||
+                          (selectedCategoryData?.anyGenre && familyFriendlyOn)
+                      ),
+                    });
+                    const displayRating = getNormalizedRating(movie);
+                    const posterUrl = getDisplayPosterUrl(
+                      movie,
+                      familyFriendlyOn
+                    );
+                    const groupedProviders = getGroupedProviders(movie.providers);
+                    const providerChips = getProviderTypeChips(movie);
+                    const bestSummary = getBestProviderSummary(movie);
+                    const providerOpen = Boolean(providerExpanded[movie.id]);
+                    const reviewOpen =
+                      Boolean(reviewExpanded[movie.id]) ||
+                      Boolean(userReviews[movie.id]) ||
+                      Boolean(reviewDrafts[movie.id]);
+                    const primaryActionLabel = getPrimaryActionLabel(movie);
+
+                    return (
+                      <div
+                        key={`${movie.id}-${movie.title}`}
+                        className="min-w-0 overflow-hidden rounded-2xl border border-slate-800 bg-[#10244b]/95 shadow-[0_10px_28px_rgba(0,0,0,0.28)]"
+                      >
+                        <img
+                          src={posterUrl}
+                          alt={movie.title}
+                          className="h-[270px] w-full cursor-pointer object-cover md:h-[300px]"
+                          onClick={() => addRecentlyViewed(movie)}
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            if (
+                              !target.src.endsWith(FAMILY_SAFE_POSTER_PLACEHOLDER)
+                            ) {
+                              target.src = FAMILY_SAFE_POSTER_PLACEHOLDER;
+                            }
+                          }}
+                        />
+
+                        <div className="p-4">
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h2 className="line-clamp-2 text-lg font-bold text-white">
+                                {movie.title}
+                              </h2>
+
+                              {movie.release_date && (
+                                <div className="mt-0.5 text-sm text-slate-400">
+                                  {movie.release_date}
+                                </div>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={() => toggleFavorite(movie)}
+                              className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                favorite
+                                  ? "bg-pink-600 text-white"
+                                  : "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                              }`}
+                            >
+                              {favorite ? "★ Favorite" : "☆ Favorite"}
+                            </button>
+                          </div>
+
+                          <div className="mb-3 flex flex-wrap gap-2">
+                            <span
+                              className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${rippleBadge.className}`}
+                            >
+                              {rippleBadge.label}
+                            </span>
+
+                            {displayRating && (
+                              <span className="rounded-full bg-cyan-900/60 px-3 py-1 text-[11px] text-cyan-100">
+                                Rated {displayRating}
+                              </span>
+                            )}
+
+                            {typeof movie.vote_average === "number" && (
+                              <span className="rounded-full bg-amber-900/50 px-3 py-1 text-[11px] text-amber-200">
+                                TMDB {movie.vote_average.toFixed(1)}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="line-clamp-2 text-sm text-slate-300">
+                            {movie.overview || "Overview unavailable"}
+                          </p>
+
+                          <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
+                            <div className="text-sm font-semibold text-emerald-200">
+                              {bestSummary}
+                            </div>
+
+                            {providerChips.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {providerChips.map((type) => (
+                                  <span
+                                    key={`${movie.id}-${type}`}
+                                    className="rounded-full border border-slate-600/60 bg-slate-900/35 px-2.5 py-1 text-[11px] font-semibold text-slate-200"
+                                  >
+                                    {PROVIDER_LABELS[type]}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {movie.priceStatus &&
+                              movie.priceStatus !== bestSummary && (
+                                <div className="mt-2 text-xs text-emerald-100/80">
+                                  {movie.priceStatus}
+                                </div>
+                              )}
+                          </div>
+
+                          {(movie.providers?.length || 0) > 0 && (
+                            <div className="mt-3">
+                              <button
+                                onClick={() => toggleProviderExpanded(movie.id)}
+                                className="text-sm font-semibold text-cyan-200 transition hover:text-cyan-100"
+                              >
+                                {providerOpen
+                                  ? "Hide providers"
+                                  : "More ways to watch"}
+                              </button>
+
+                              {providerOpen && (
+                                <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/25 p-3 text-sm">
+                                  {(["free", "stream", "rent", "buy"] as const).map(
+                                    (type) =>
+                                      groupedProviders[type].length > 0 ? (
+                                        <div
+                                          key={`${movie.id}-${type}`}
+                                          className="mb-2 last:mb-0"
+                                        >
+                                          <div className="font-semibold text-slate-100">
+                                            {PROVIDER_LABELS[type]}
+                                          </div>
+                                          <div className="mt-1 text-slate-300">
+                                            {groupedProviders[type].join(", ")}
+                                          </div>
+                                        </div>
+                                      ) : null
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            <a
+                              href={
+                                movie.providerLink && movie.providerLink.trim()
+                                  ? movie.providerLink
+                                  : `https://www.themoviedb.org/movie/${movie.id}`
+                              }
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={() => addRecentlyViewed(movie)}
+                              className="inline-flex rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500"
+                            >
+                              {primaryActionLabel}
+                            </a>
+
+                            <button
+                              onClick={() => addRecentlyViewed(movie)}
+                              className="rounded-full bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-600"
+                            >
+                              Viewed
+                            </button>
+
+                            <button
+                              onClick={() => toggleReviewExpanded(movie.id)}
+                              className="rounded-full border border-slate-600 bg-slate-900/30 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800/60"
+                            >
+                              {reviewOpen ? "Hide Review" : "Write Review"}
+                            </button>
+
+                            <button
+                              onClick={() => hideMovie(movie)}
+                              className="rounded-full border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20"
+                            >
+                              Don&apos;t Show Again
+                            </button>
+                          </div>
+
+                          {reviewOpen && (
+                            <div className="mt-4 rounded-xl border border-slate-700 bg-slate-900/30 p-4">
+                              <div className="mb-3 flex items-center justify-between">
+                                <div className="text-sm font-semibold text-white">
+                                  Your Review
+                                </div>
+
+                                {userReviews[movie.id] && (
+                                  <button
+                                    onClick={() => deleteMovieReview(movie.id)}
+                                    disabled={reviewBusy}
+                                    className="text-xs text-red-300 hover:text-red-200 disabled:opacity-60"
+                                  >
+                                    Delete Review
+                                  </button>
+                                )}
+                              </div>
+
+                              <div className="mb-3 flex gap-2">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <button
+                                    key={star}
+                                    onClick={() =>
+                                      saveMovieReview(
+                                        movie,
+                                        star,
+                                        getMovieReviewText(movie.id)
+                                      )
+                                    }
+                                    disabled={reviewBusy}
+                                    className={`text-2xl leading-none transition ${
+                                      star <= rating
+                                        ? "text-yellow-400"
+                                        : "text-slate-500 hover:text-yellow-300"
+                                    } disabled:opacity-60`}
+                                  >
+                                    ★
+                                  </button>
+                                ))}
+                              </div>
+
+                              <textarea
+                                value={reviewText}
+                                onChange={(e) =>
+                                  setMovieReviewDraft(movie.id, e.target.value)
+                                }
+                                placeholder="Write a short review..."
+                                className="min-h-[88px] w-full rounded-xl border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+                              />
+
+                              <div className="mt-3 flex gap-3">
+                                <button
+                                  onClick={() =>
+                                    saveMovieReview(
+                                      movie,
+                                      Math.max(rating, 1),
+                                      reviewText
+                                    )
+                                  }
+                                  disabled={reviewBusy}
+                                  className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
+                                >
+                                  {reviewBusy ? "Saving..." : "Save Review"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {familyFriendlyOn && isNotRatedLike(movie) && (
+                            <div className="mt-3 rounded-full bg-emerald-900/50 px-3 py-1 text-[11px] text-emerald-200">
+                              Family-safe poster shown
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
             {favorites.length > 0 && (
-              <div className="mt-6 rounded-xl border border-cyan-400/15 bg-[#0d1f42]/80 px-4 py-4 backdrop-blur-sm">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-base font-bold text-white">Your Favorites</h3>
-                    <p className="text-sm text-slate-400">
-                      Saved to your ClearStream dev account.
-                    </p>
-                  </div>
-                </div>
+              <div className="mt-10">
+                <h3 className="mb-4 text-lg font-bold text-white">
+                  Your Favorites
+                </h3>
 
-                <div className="flex gap-3 overflow-x-auto pb-2">
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6">
                   {favorites.map((movie) => (
                     <button
                       key={`favorite-${movie.id}`}
-                      onClick={() => {
-                        addRecentlyViewed(movie);
-                        setResults([movie, ...results.filter((m) => m.id !== movie.id)]);
-                        setHasSearched(true);
-                      }}
-                      className="w-[130px] shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-[#10244b] text-left transition hover:border-cyan-400/50"
+                      onClick={() => addRecentlyViewed(movie)}
+                      className="overflow-hidden rounded-xl border border-slate-700 bg-[#10244b]"
                     >
                       <img
-                        src={getPosterUrl(movie.poster_path)}
+                        src={getDisplayPosterUrl(movie, familyFriendlyOn)}
                         alt={movie.title}
-                        className="h-[170px] w-full object-cover"
+                        className="h-40 w-full object-cover"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (
+                            !target.src.endsWith(FAMILY_SAFE_POSTER_PLACEHOLDER)
+                          ) {
+                            target.src = FAMILY_SAFE_POSTER_PLACEHOLDER;
+                          }
+                        }}
                       />
-                      <div className="p-2 text-sm font-semibold text-white">
+                      <div className="p-2 text-sm text-white">
                         {movie.title}
                       </div>
                     </button>
@@ -1368,280 +2023,43 @@ export default function HomePage() {
               </div>
             )}
 
-            {loading && (
-              <div className="mt-6 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-4">
-                <p className="animate-pulse font-semibold text-cyan-200">
-                  {searchMessage}
-                </p>
-                <div className="mt-3 flex gap-2">
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-cyan-400" />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400 [animation-delay:120ms]" />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-emerald-400 [animation-delay:240ms]" />
-                </div>
-              </div>
-            )}
+            {recentlyViewed.length > 0 && (
+              <div className="mt-10">
+                <h3 className="mb-4 text-lg font-bold text-white">
+                  Recently Viewed
+                </h3>
 
-            {error && <p className="mt-6 text-red-400">{error}</p>}
-
-            {!loading && !error && hasSearched && results.length > 0 && (
-              <div className="mt-6 text-sm text-slate-400">
-                Showing {results.length} result{results.length !== 1 ? "s" : ""}
-              </div>
-            )}
-
-            {!loading && !error && (
-              <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 2xl:grid-cols-3">
-                {displayedResults.map((movie) => {
-                  const rippleConfidence = getRippleConfidence(movie, {
-                    familyFriendlyOn,
-                    activeMode,
-                    gOnly: Boolean(selectedCategoryData?.gOnly),
-                  });
-
-                  return (
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6">
+                  {recentlyViewed.map((movie) => (
                     <div
-                      key={movie.id}
-                      className="min-w-0 overflow-hidden rounded-2xl border border-slate-800 bg-[#10244b]/95 shadow-lg backdrop-blur-sm"
+                      key={`recent-${movie.id}`}
+                      className="overflow-hidden rounded-xl border border-slate-700 bg-[#10244b]"
                     >
-                      <button
-                        type="button"
-                        onClick={() => addRecentlyViewed(movie)}
-                        className="block w-full text-left"
-                      >
-                        <img
-                          src={getPosterUrl(movie.poster_path)}
-                          alt={movie.title}
-                          className="h-[320px] w-full object-cover"
-                          onError={(e) => {
-                            const target = e.currentTarget;
-                            if (!target.dataset.fallbackApplied) {
-                              target.dataset.fallbackApplied = "true";
-                              target.src = "/images/poster-fallback.png";
-                            }
-                          }}
-                        />
-                      </button>
-
-                      <div className="min-h-[380px] p-5">
-                        <div className="flex items-start justify-between gap-3">
-                          <h2 className="text-xl font-bold text-white">
-                            {movie.title}
-                          </h2>
-
-                          <button
-                            type="button"
-                            onClick={() => toggleFavorite(movie)}
-                            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold transition ${
-                              isFavorite(movie.id)
-                                ? "border-yellow-300/50 bg-yellow-500/15 text-yellow-200"
-                                : "border-slate-600 bg-slate-800 text-slate-200 hover:border-cyan-400/50"
-                            }`}
-                            title="Save to favorites"
-                          >
-                            {isFavorite(movie.id) ? "★ Saved" : "☆ Favorite"}
-                          </button>
-                        </div>
-
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {movie.certification && (
-                            <span className="inline-block rounded-full border border-green-500/30 bg-green-600/20 px-3 py-1 text-sm font-semibold text-green-300">
-                              Rated {movie.certification}
-                            </span>
-                          )}
-
-                          {typeof movie.vote_average === "number" &&
-                            movie.vote_average > 0 && (
-                              <span className="inline-block rounded-full border border-blue-500/30 bg-blue-600/20 px-3 py-1 text-sm font-semibold text-blue-300">
-                                TMDB {movie.vote_average.toFixed(1)}/10
-                              </span>
-                            )}
-
-                          {movie.release_date && (
-                            <span className="inline-block rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-sm text-slate-300">
-                              {movie.release_date}
-                            </span>
-                          )}
-
-                          {hasSearched && (
-                            <span
-                              className={`inline-block rounded-full border px-3 py-1 text-sm font-semibold ${rippleConfidence.className}`}
-                            >
-                              {rippleConfidence.label}
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="mt-4 text-sm leading-6 text-slate-300">
-                          {movie.overview && movie.overview.trim().length > 0
-                            ? movie.overview
-                            : "Overview unavailable."}
-                        </p>
-
-                        <div className="mt-5 rounded-xl border border-slate-700 bg-slate-900/40 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-semibold text-slate-200">
-                              Your Rating
-                            </p>
-                            {getMovieRating(movie.id) > 0 && (
-                              <span className="text-xs text-slate-400">
-                                Saved: {getMovieRating(movie.id)}/5
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {[1, 2, 3, 4, 5].map((star) => {
-                              const active = star <= getMovieRating(movie.id);
-
-                              return (
-                                <button
-                                  key={`${movie.id}-star-${star}`}
-                                  type="button"
-                                  onClick={() => saveMovieReview(movie, star)}
-                                  disabled={reviewLoadingMovieId === movie.id}
-                                  className={`rounded-full border px-3 py-1 text-sm font-bold transition ${
-                                    active
-                                      ? "border-yellow-300/50 bg-yellow-500/15 text-yellow-200"
-                                      : "border-slate-600 bg-slate-800 text-slate-200 hover:border-cyan-400/50"
-                                  }`}
-                                  title={`Rate ${star} out of 5`}
-                                >
-                                  {active ? "★" : "☆"} {star}
-                                </button>
-                              );
-                            })}
-                          </div>
-
-                          <div className="mt-4">
-                            <label
-                              htmlFor={`review-${movie.id}`}
-                              className="mb-2 block text-sm font-semibold text-slate-200"
-                            >
-                              Short Review
-                            </label>
-
-                            <textarea
-                              id={`review-${movie.id}`}
-                              value={getMovieReviewText(movie.id)}
-                              onChange={(e) =>
-                                setMovieReviewDraft(movie.id, e.target.value)
-                              }
-                              placeholder="Write a short note about this movie..."
-                              className="min-h-[88px] w-full rounded-xl border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
-                            />
-
-                            <div className="mt-3 flex flex-wrap gap-3">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  saveMovieReview(
-                                    movie,
-                                    getMovieRating(movie.id) || 5,
-                                    getMovieReviewText(movie.id)
-                                  )
-                                }
-                                disabled={reviewLoadingMovieId === movie.id}
-                                className="inline-flex items-center rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:opacity-60"
-                              >
-                                {reviewLoadingMovieId === movie.id
-                                  ? "Saving..."
-                                  : "Save Review"}
-                              </button>
-
-                              {getMovieRating(movie.id) > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => deleteMovieReview(movie.id)}
-                                  disabled={reviewLoadingMovieId === movie.id}
-                                  className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400/50 disabled:opacity-60"
-                                >
-                                  Remove Review
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {hasSearched && (
-                          <div className="mt-4">
-                            <p className="text-sm font-semibold text-slate-200">
-                              Provider Status
-                            </p>
-
-                            {movie.providers && movie.providers.length > 0 ? (
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {movie.providers.map((provider, index) => (
-                                  <span
-                                    key={`${movie.id}-${provider.name}-${index}`}
-                                    className="inline-block rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200"
-                                  >
-                                    {provider.type === "stream" &&
-                                      `Stream on ${provider.name}`}
-                                    {provider.type === "free" &&
-                                      `Free on ${provider.name}`}
-                                    {provider.type === "rent" &&
-                                      `Rent on ${provider.name}`}
-                                    {provider.type === "buy" &&
-                                      `Buy on ${provider.name}`}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="mt-2 space-y-1">
-                                <p className="text-sm text-slate-400">
-                                  Provider data not available.
-                                </p>
-                                <p className="text-sm text-amber-200">
-                                  Ripple is uncertain about watch options for this
-                                  movie.
-                                </p>
-                              </div>
-                            )}
-
-                            <p className="mt-3 text-sm text-slate-400">
-                              {movie.providers && movie.providers.length > 0
-                                ? movie.priceStatus ||
-                                  "Price unavailable from current data source."
-                                : "Watch availability has not been confirmed."}
-                            </p>
-
-                            <div className="mt-4 flex flex-wrap gap-3">
-                              {movie.providerLink && (
-                                <a
-                                  href={movie.providerLink}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={() => addRecentlyViewed(movie)}
-                                  className="inline-flex items-center rounded-full bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500"
-                                >
-                                  View Watch Options
-                                </a>
-                              )}
-
-                              <button
-                                type="button"
-                                onClick={() => addRecentlyViewed(movie)}
-                                className="inline-flex items-center rounded-full border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-cyan-400/50"
-                              >
-                                Mark Viewed
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                      <img
+                        src={getDisplayPosterUrl(movie, familyFriendlyOn)}
+                        alt={movie.title}
+                        className="h-40 w-full object-cover"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (
+                            !target.src.endsWith(FAMILY_SAFE_POSTER_PLACEHOLDER)
+                          ) {
+                            target.src = FAMILY_SAFE_POSTER_PLACEHOLDER;
+                          }
+                        }}
+                      />
+                      <div className="p-2 text-sm text-white">
+                        {movie.title}
                       </div>
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            )}
-
-            {!loading && !error && hasSearched && results.length === 0 && (
-              <p className="mt-8 text-slate-300">No results found for this mode.</p>
             )}
           </section>
 
           <aside className="hidden xl:block">
-            <div className="sticky top-8">
+            <div className="sticky top-8 space-y-6">
               <FamilyFriendlyPanel
                 familyFriendlyOn={familyFriendlyOn}
                 onToggle={() => setFamilyFriendlyOn((prev) => !prev)}
@@ -1650,168 +2068,22 @@ export default function HomePage() {
                 noPg13On={noPg13On}
                 onToggleNoPg13={() => setNoPg13On((prev) => !prev)}
               />
+
+              <AuthPanel
+                authMode={authMode}
+                setAuthMode={setAuthMode}
+                authName={authName}
+                setAuthName={setAuthName}
+                authEmail={authEmail}
+                setAuthEmail={setAuthEmail}
+                authPassword={authPassword}
+                setAuthPassword={setAuthPassword}
+                onSubmit={handleAuthSubmit}
+              />
             </div>
           </aside>
         </div>
       </div>
-
-      <style jsx>{`
-        .pond-scroll::-webkit-scrollbar {
-          height: 10px;
-        }
-
-        .pond-scroll::-webkit-scrollbar-track {
-          background: rgba(15, 23, 42, 0.9);
-          border-radius: 999px;
-        }
-
-        .pond-scroll::-webkit-scrollbar-thumb {
-          background: rgba(34, 211, 238, 0.35);
-          border-radius: 999px;
-        }
-
-        .pond-button {
-          border-radius: 41% 59% 55% 45% / 50% 40% 60% 50%;
-          background:
-            radial-gradient(
-              circle at 52% 50%,
-              rgba(45, 125, 170, 0.5),
-              rgba(10, 34, 61, 0.9) 68%,
-              rgba(5, 15, 35, 0.98) 100%
-            );
-          box-shadow:
-            inset 0 16px 24px rgba(186, 230, 253, 0.08),
-            inset 0 -18px 26px rgba(7, 31, 53, 0.82),
-            0 14px 24px rgba(2, 6, 23, 0.5),
-            0 0 0 2px rgba(12, 74, 110, 0.15);
-        }
-
-        .pond-depth {
-          border-radius: inherit;
-          background:
-            radial-gradient(
-              circle at 28% 20%,
-              rgba(255, 255, 255, 0.18),
-              transparent 16%
-            ),
-            radial-gradient(
-              circle at 72% 58%,
-              rgba(103, 232, 249, 0.12),
-              transparent 18%
-            ),
-            radial-gradient(
-              circle at 50% 52%,
-              rgba(34, 211, 238, 0.14),
-              rgba(8, 47, 73, 0.3) 52%,
-              rgba(8, 23, 38, 0.82) 78%
-            );
-          animation: pondShimmer 4.6s ease-in-out infinite;
-        }
-
-        .pond-waterline {
-          border-radius: inherit;
-          border: 1px solid rgba(186, 230, 253, 0.12);
-          box-shadow:
-            inset 0 0 0 1px rgba(255, 255, 255, 0.04),
-            0 0 22px rgba(34, 211, 238, 0.08);
-        }
-
-        .pond-shine {
-          border-radius: inherit;
-          background:
-            radial-gradient(
-              circle at 30% 22%,
-              rgba(255, 255, 255, 0.18),
-              transparent 16%
-            ),
-            radial-gradient(
-              circle at 65% 26%,
-              rgba(255, 255, 255, 0.08),
-              transparent 12%
-            );
-          mix-blend-mode: screen;
-          pointer-events: none;
-        }
-
-        .pond-reeds-left,
-        .pond-reeds-right {
-          width: 20px;
-          height: 28px;
-          pointer-events: none;
-        }
-
-        .pond-reeds-left::before,
-        .pond-reeds-left::after,
-        .pond-reeds-right::before,
-        .pond-reeds-right::after {
-          content: "";
-          position: absolute;
-          bottom: 0;
-          width: 2px;
-          border-radius: 999px;
-          background: linear-gradient(
-            to top,
-            rgba(101, 163, 13, 0.95),
-            rgba(190, 242, 100, 0.85)
-          );
-          box-shadow: 0 0 4px rgba(132, 204, 22, 0.2);
-        }
-
-        .pond-reeds-left::before {
-          left: 4px;
-          height: 20px;
-          transform: rotate(-10deg);
-        }
-
-        .pond-reeds-left::after {
-          left: 10px;
-          height: 24px;
-          transform: rotate(8deg);
-        }
-
-        .pond-reeds-right::before {
-          right: 4px;
-          height: 18px;
-          transform: rotate(9deg);
-        }
-
-        .pond-reeds-right::after {
-          right: 10px;
-          height: 23px;
-          transform: rotate(-7deg);
-        }
-
-        .ripple-jump {
-          animation: rippleJump 720ms ease-out;
-        }
-
-        @keyframes rippleJump {
-          0% {
-            transform: translateY(18px) scale(0.94);
-          }
-          22% {
-            transform: translateY(-36px) scale(1.05);
-          }
-          55% {
-            transform: translateY(-18px) scale(1.02);
-          }
-          100% {
-            transform: translateY(8px) scale(1);
-          }
-        }
-
-        @keyframes pondShimmer {
-          0%,
-          100% {
-            transform: scale(1);
-            opacity: 0.94;
-          }
-          50% {
-            transform: scale(1.03);
-            opacity: 1;
-          }
-        }
-      `}</style>
     </main>
   );
 }
@@ -1832,23 +2104,14 @@ function FeatureButton({
   return (
     <button
       onClick={onClick}
-      className={`min-w-0 overflow-hidden rounded-2xl border transition ${
+      className={`rounded-2xl border px-4 py-4 transition ${
         active
-          ? "border-cyan-400 bg-cyan-600/15 shadow-[0_0_20px_rgba(34,211,238,0.26)]"
-          : "border-slate-700 bg-[#10244b]/90 hover:bg-slate-800"
+          ? "border-cyan-400 bg-cyan-600/20 shadow-[0_0_25px_rgba(34,211,238,0.2)]"
+          : "border-slate-700 bg-[#10244b] hover:border-cyan-500/30 hover:bg-[#12305f]"
       }`}
-      title={label}
     >
-      <div className="flex min-h-[132px] flex-col items-center justify-center p-4">
-        <img
-          src={image}
-          alt={label}
-          className="mb-3 h-14 w-auto object-contain"
-        />
-        <span className="text-center text-base font-semibold text-white">
-          {label}
-        </span>
-      </div>
+      <img src={image} alt={label} className="mx-auto h-12" />
+      <div className="mt-2 font-semibold text-white">{label}</div>
     </button>
   );
 }
@@ -1872,62 +2135,154 @@ function FamilyFriendlyPanel({
     <div className="flex flex-col items-center">
       <button
         onClick={onToggle}
-        aria-pressed={familyFriendlyOn}
-        className={`relative h-[280px] w-full max-w-[280px] overflow-hidden rounded-full transition-all duration-300 ${
+        className={`h-[260px] w-[260px] overflow-hidden rounded-full transition ${
           familyFriendlyOn
-            ? "scale-105 ring-8 ring-green-400 shadow-[0_0_40px_12px_rgba(74,222,128,0.75)]"
-            : "ring-2 ring-slate-700 hover:scale-105"
+            ? "ring-8 ring-emerald-300 shadow-[0_0_55px_rgba(34,197,94,0.95)]"
+            : "ring-0"
         }`}
-        title="Choose Family Friendly Options"
       >
         <img
           src="/images/ripple-choosefamily.png"
-          alt="Choose Family Friendly Options"
+          alt={familyFriendlyOn ? "Family Friendly On" : "Family Friendly Off"}
           className="h-full w-full object-cover"
         />
-
-        <div className="absolute inset-x-0 bottom-0 bg-black/50 px-4 py-3">
-          <span className="block text-center text-lg font-extrabold leading-tight text-white">
-            Choose Family Friendly Options
-          </span>
-        </div>
       </button>
 
-      <p className="mt-4 max-w-[260px] text-center text-sm text-slate-300">
-        Click to turn strict family-safe filtering on or off.
-      </p>
+      {familyFriendlyOn && (
+        <div className="mt-3 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-4 py-2 text-center text-sm font-semibold text-emerald-200">
+          Family friendly mode ON
+        </div>
+      )}
 
-      <div className="mt-5 flex w-full max-w-[280px] flex-col gap-3">
+      <button
+        onClick={onToggleNoRRated}
+        className={`mt-4 rounded-xl border px-4 py-2 transition ${
+          noRRatedOn
+            ? "border-cyan-400 bg-cyan-600/20 text-cyan-200 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+            : "border-slate-600 text-white"
+        }`}
+      >
+        No R Rated
+      </button>
+
+      {noRRatedOn && (
+        <div className="mt-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200">
+          No R rated titles
+        </div>
+      )}
+
+      <button
+        onClick={onToggleNoPg13}
+        className={`mt-3 rounded-xl border px-4 py-2 transition ${
+          noPg13On
+            ? "border-cyan-400 bg-cyan-600/20 text-cyan-200 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
+            : "border-slate-600 text-white"
+        }`}
+      >
+        No PG-13
+      </button>
+
+      {noPg13On && (
+        <div className="mt-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-200">
+          No PG-13 titles
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuthPanel({
+  authMode,
+  setAuthMode,
+  authName,
+  setAuthName,
+  authEmail,
+  setAuthEmail,
+  authPassword,
+  setAuthPassword,
+  onSubmit,
+}: {
+  authMode: "signin" | "signup";
+  setAuthMode: (mode: "signin" | "signup") => void;
+  authName: string;
+  setAuthName: (value: string) => void;
+  authEmail: string;
+  setAuthEmail: (value: string) => void;
+  authPassword: string;
+  setAuthPassword: (value: string) => void;
+  onSubmit: (mode: "signin" | "signup") => void;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-700 bg-[#10244b]/90 p-5 shadow-xl">
+      <div className="mb-4">
+        <h3 className="text-xl font-bold text-white">Account</h3>
+        <p className="mt-1 text-sm text-slate-300">
+          Save watched titles, hidden titles, banned titles, ratings, and future Ripple rewards.
+        </p>
+      </div>
+
+      <div className="mb-4 flex gap-2">
         <button
-          onClick={onToggleNoRRated}
-          aria-pressed={noRRatedOn}
-          className={`min-h-[68px] rounded-2xl border px-4 py-3 text-sm font-bold transition ${
-            noRRatedOn
-              ? "border-amber-300 bg-amber-500/15 text-amber-200 shadow-[0_0_18px_rgba(251,191,36,0.28)]"
-              : "border-slate-700 bg-[#10244b]/90 text-slate-100 hover:bg-slate-800"
+          onClick={() => setAuthMode("signin")}
+          className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold ${
+            authMode === "signin"
+              ? "bg-cyan-600 text-white"
+              : "bg-slate-800 text-slate-200"
           }`}
-          title="Exclude R rated and stronger content"
         >
-          No R Rated
+          Sign In
         </button>
-
         <button
-          onClick={onToggleNoPg13}
-          aria-pressed={noPg13On}
-          className={`min-h-[68px] rounded-2xl border px-4 py-3 text-sm font-bold transition ${
-            noPg13On
-              ? "border-cyan-300 bg-cyan-500/15 text-cyan-200 shadow-[0_0_18px_rgba(34,211,238,0.28)]"
-              : "border-slate-700 bg-[#10244b]/90 text-slate-100 hover:bg-slate-800"
+          onClick={() => setAuthMode("signup")}
+          className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold ${
+            authMode === "signup"
+              ? "bg-cyan-600 text-white"
+              : "bg-slate-800 text-slate-200"
           }`}
-          title="Exclude PG-13 titles"
         >
-          No PG-13
+          Sign Up
         </button>
       </div>
 
-      <p className="mt-3 max-w-[260px] text-center text-xs text-slate-400">
-        These filters stay active even when Family Friendly mode is off.
-      </p>
+      <div className="space-y-3">
+        {authMode === "signup" && (
+          <input
+            type="text"
+            value={authName}
+            onChange={(e) => setAuthName(e.target.value)}
+            placeholder="Full name"
+            className="w-full rounded-xl border border-slate-600 bg-slate-950/60 px-4 py-3 text-white outline-none focus:border-cyan-400"
+          />
+        )}
+
+        <input
+          type="email"
+          value={authEmail}
+          onChange={(e) => setAuthEmail(e.target.value)}
+          placeholder="Email"
+          className="w-full rounded-xl border border-slate-600 bg-slate-950/60 px-4 py-3 text-white outline-none focus:border-cyan-400"
+        />
+
+        <input
+          type="password"
+          value={authPassword}
+          onChange={(e) => setAuthPassword(e.target.value)}
+          placeholder="Password"
+          className="w-full rounded-xl border border-slate-600 bg-slate-950/60 px-4 py-3 text-white outline-none focus:border-cyan-400"
+        />
+
+        <button
+          onClick={() => onSubmit(authMode)}
+          className="w-full rounded-full bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
+        >
+          {authMode === "signup" ? "Create Account" : "Sign In"}
+        </button>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-100">
+        Planned account features: watch history, banned movie list, favorites,
+        highly rated movies, Ripple points, and reward redemption.
+      </div>
     </div>
   );
 }
