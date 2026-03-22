@@ -3,6 +3,7 @@ import clientPromise from "@/lib/mongodb";
 
 type MovieQuery = {
   familySafe?: boolean;
+  source?: string;
 };
 
 type MovieDoc = {
@@ -11,12 +12,31 @@ type MovieDoc = {
   source?: string;
   link?: string | null;
   poster?: string | null;
+  poster_path?: string | null;
   familySafe?: boolean;
   tags?: string[];
+  genres?: string[];
   customRating?: string;
   notes?: string;
   overview?: string;
+  description?: string;
   release_date?: string;
+};
+
+type OutputMovie = {
+  _id?: unknown;
+  title: string;
+  source: string;
+  link: string;
+  poster: string;
+  poster_path: string;
+  overview: string;
+  description: string;
+  release_date: string;
+  familySafe: boolean;
+  tags: string[];
+  genres: string[];
+  customRating: string;
 };
 
 const BAD_TITLE_PATTERNS = [
@@ -143,10 +163,11 @@ function isBadTitle(title?: string) {
 function sourceRank(source?: string) {
   const s = String(source || "").toLowerCase();
 
-  if (s === "christiancinema") return 0;
-  if (s === "fishflix") return 1;
-  if (s === "pureflix") return 2;
-  return 3;
+  if (s === "christian_db") return 0;
+  if (s === "christiancinema") return 1;
+  if (s === "fishflix") return 2;
+  if (s === "pureflix") return 3;
+  return 4;
 }
 
 function keywordScore(text: string, words: string[]) {
@@ -162,11 +183,24 @@ function keywordScore(text: string, words: string[]) {
 
 function movieMatchesAliases(movie: MovieDoc, aliases: string[]) {
   const text =
-    `${movie.title || ""} ${movie.notes || ""} ${movie.overview || ""} ${
+    `${movie.title || ""} ${movie.notes || ""} ${movie.overview || ""} ${movie.description || ""} ${
       movie.tags?.join(" ") || ""
-    }`.toLowerCase();
+    } ${movie.genres?.join(" ") || ""}`.toLowerCase();
 
   return keywordScore(text, aliases);
+}
+
+function movieMatchesSearch(movie: MovieDoc, search: string) {
+  if (!search) return true;
+
+  const q = search.toLowerCase();
+
+  const text =
+    `${movie.title || ""} ${movie.notes || ""} ${movie.overview || ""} ${movie.description || ""} ${
+      movie.tags?.join(" ") || ""
+    } ${movie.genres?.join(" ") || ""}`.toLowerCase();
+
+  return text.includes(q);
 }
 
 function ratingAllowed(
@@ -191,11 +225,31 @@ function shuffle<T>(arr: T[]) {
   return a;
 }
 
+function normalizeMovie(movie: MovieDoc): OutputMovie {
+  return {
+    _id: movie._id,
+    title: movie.title || "",
+    source: movie.source || "mongo",
+    link: movie.link || "",
+    poster: movie.poster || movie.poster_path || "",
+    poster_path: movie.poster_path || movie.poster || "",
+    overview: movie.overview || movie.description || "",
+    description: movie.description || movie.overview || "",
+    release_date: movie.release_date || "",
+    familySafe: movie.familySafe ?? false,
+    tags: movie.tags || [],
+    genres: movie.genres || [],
+    customRating: movie.customRating || "",
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
 
     const category = searchParams.get("category") || "";
+    const search = searchParams.get("search") || "";
+    const source = searchParams.get("source") || "";
     const limit = Number(searchParams.get("limit") || 8);
     const family = searchParams.get("family") === "true";
     const gOnly = searchParams.get("gOnly") === "true";
@@ -218,10 +272,14 @@ export async function GET(req: NextRequest) {
       query.familySafe = true;
     }
 
+    if (source) {
+      query.source = source;
+    }
+
     const docs = await db
       .collection<MovieDoc>("faith_movies")
       .find(query)
-      .limit(limit * 80)
+      .limit(limit * 200)
       .toArray();
 
     const aliases = CATEGORY_ALIASES[category] || [];
@@ -229,25 +287,27 @@ export async function GET(req: NextRequest) {
     let results = docs
       .filter(movie => {
         if (isBadTitle(movie.title)) return false;
-
         if (excludeTitles.includes(movie.title || "")) return false;
-
         if (excludeIds.includes(String(movie._id))) return false;
-
         if (!ratingAllowed(movie.customRating, gOnly)) return false;
-
+        if (!movieMatchesSearch(movie, search)) return false;
         return true;
       })
       .map(movie => ({
         movie,
-        score: movieMatchesAliases(movie, aliases),
+        score:
+          movieMatchesAliases(movie, aliases) +
+          (search ? (movieMatchesSearch(movie, search) ? 100 : 0) : 0),
       }))
-      .filter(x => aliases.length === 0 || x.score > 0)
+      .filter(x => {
+        if (search) return true;
+        return aliases.length === 0 || x.score > 0;
+      })
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return sourceRank(a.movie.source) - sourceRank(b.movie.source);
       })
-      .map(x => x.movie);
+      .map(x => normalizeMovie(x.movie));
 
     if (randomize) {
       results = shuffle(results);
@@ -258,7 +318,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       movies: results,
     });
-
   } catch (err) {
     return NextResponse.json(
       { error: "movies route error" },
